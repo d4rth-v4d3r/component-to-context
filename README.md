@@ -1,6 +1,6 @@
 # React Context Picker (Chrome extension)
 
-**Google Chrome only.** Dev-only helper: **Alt+click** (macOS: **Option+click**) a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
+**Google Chrome only.** Dev-only helper: hold **Alt** (Windows/Linux) or **Option** (macOS), then **left-click** a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
 
 ## Prerequisites
 
@@ -64,9 +64,10 @@ If your dev server uses **another port**, add it to the `DEV_PORTS` array in [`s
 
 ## Troubleshooting
 
-- **Nothing happens on Alt+click**  
+- **Nothing happens when holding Option/Alt and clicking**  
   - Confirm the page URL matches an [allowed pattern](#allowed-urls) (scheme, host, **port**).  
-  - Reload the extension and refresh the tab.
+  - **Reload** the extension on `chrome://extensions` and **refresh** the tab (content scripts update only after that).  
+  - Hold the modifier **before** the click; the handler listens on `mousedown` in capture phase.
 
 - **No file/line or lots of `Anonymous`**  
   - Use a **development** build (`next dev`, Vite dev, etc.), not production.  

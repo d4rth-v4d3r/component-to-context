@@ -48,6 +48,7 @@ const manifest = {
       matches: [...matches],
       js: ["content/pick.js"],
       run_at: "document_idle",
+      all_frames: true,
     },
   ],
   side_panel: {

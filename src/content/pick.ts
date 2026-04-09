@@ -19,12 +19,49 @@ function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromNode>):
   return `${primary}\n\nAdditional context:\n- Props: ${json}`;
 }
 
-function onPointerDown(ev: PointerEvent): void {
-  if (!ev.altKey) return;
+/** Tracks Option/Alt — modifier flags on `mousedown` are unreliable on some macOS + Chrome setups. */
+let altKeyPhysicallyDown = false;
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.code === "AltLeft" || e.code === "AltRight") altKeyPhysicallyDown = true;
+  },
+  true,
+);
+window.addEventListener(
+  "keyup",
+  (e) => {
+    if (e.code === "AltLeft" || e.code === "AltRight") altKeyPhysicallyDown = false;
+  },
+  true,
+);
+window.addEventListener("blur", () => {
+  altKeyPhysicallyDown = false;
+}, true);
+
+/** Option (macOS) / Alt (Windows). */
+function wantsAltPick(ev: MouseEvent): boolean {
+  if (ev.altKey) return true;
+  if (altKeyPhysicallyDown) return true;
+  try {
+    return ev.getModifierState("Alt");
+  } catch {
+    return false;
+  }
+}
+
+let lastPickAt = 0;
+
+function onMouseDown(ev: MouseEvent): void {
+  if (!wantsAltPick(ev)) return;
   if (ev.button !== 0) return;
 
   ev.preventDefault();
-  ev.stopPropagation();
+  ev.stopImmediatePropagation();
+
+  const now = performance.now();
+  if (now - lastPickAt < 350) return;
+  lastPickAt = now;
 
   const target = ev.target;
   if (!(target instanceof Node)) return;
@@ -42,4 +79,4 @@ function onPointerDown(ev: PointerEvent): void {
   });
 }
 
-window.addEventListener("pointerdown", onPointerDown, true);
+window.addEventListener("mousedown", onMouseDown, { capture: true, passive: false });
