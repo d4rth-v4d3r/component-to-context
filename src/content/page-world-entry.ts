@@ -145,7 +145,7 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     out.push({ resolved, layer, pathIndex: i, score, kind: "leaf", propsText, stateText });
   }
 
-  // Keep only the nearest leaf per file.
+  // Per file: keep nearest (leaf, smallest pathIndex) and outermost in composed path (parent, largest pathIndex).
   const grouped = new Map<string, PickCandidate[]>();
   for (const c of out) {
     const arr = grouped.get(c.resolved.file) ?? [];
@@ -154,13 +154,19 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
   }
 
   const kept: PickCandidate[] = [];
-  const globalMinPathIndex = out.reduce((m, c) => Math.min(m, c.pathIndex), Number.POSITIVE_INFINITY);
+  const keyOf = (c: PickCandidate): string =>
+    `${c.resolved.file}|${c.resolved.line}|${c.resolved.name}`;
+
   for (const [, arr] of grouped) {
     arr.sort((a, b) => a.pathIndex - b.pathIndex);
-    const picked = arr[0];
-    const kind: PickCandidate["kind"] =
-      picked.pathIndex === globalMinPathIndex ? "leaf" : "parent";
-    kept.push({ ...picked, kind });
+    const leaf = arr[0];
+    const parent = arr[arr.length - 1];
+    if (keyOf(leaf) === keyOf(parent)) {
+      kept.push({ ...leaf, kind: "leaf" });
+    } else {
+      kept.push({ ...leaf, kind: "leaf" });
+      kept.push({ ...parent, kind: "parent" });
+    }
   }
 
   // Show nearest-first in dropdown across files.
