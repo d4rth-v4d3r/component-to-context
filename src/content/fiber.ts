@@ -25,9 +25,26 @@ export function normalizeDevPath(file: string): string {
   if (q !== -1) s = s.slice(0, q);
   const h = s.indexOf("#");
   if (h !== -1) s = s.slice(0, h);
-  // Next.js dev bundles use namespace `webpack://_N_E/...`
+  // Next.js dev bundles use namespace `webpack://_N_E/...` (often `_N_E/./src/...`)
   s = s.replace(/^_N_E\//, "");
+  // Webpack emits `./src/...` after stripping the namespace; drop leading `./`
+  s = s.replace(/^\.\//, "");
+  // Collapse `/./` segments (e.g. `src/./components` → `src/components`)
+  s = s.replace(/\/\.\//g, "/");
+  // DevTools sometimes shows `file.tsx:line:column` in one string (no `?` before line/col)
+  s = s.replace(/(\.(?:tsx|jsx|ts|js|mjs|cjs)):\d+(?::\d+)?$/i, "$1");
   return s;
+}
+
+const LS_DEBUG_KEY = "REACT_CONTEXT_PICKER_DEBUG";
+
+/** Same flag as content script: `localStorage.setItem('REACT_CONTEXT_PICKER_DEBUG','1')` + refresh. */
+export function isPickerDebugEnabled(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(LS_DEBUG_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -287,6 +304,67 @@ function isTsxOrJsxPath(filePath: string): boolean {
   return /\.(tsx|jsx)$/i.test(filePath);
 }
 
+function shortTypeDesc(type: unknown): string {
+  if (type == null) return "null";
+  if (typeof type === "string") return type.length > 48 ? `${type.slice(0, 48)}…` : type;
+  if (typeof type === "function") {
+    const fn = type as { name?: string; displayName?: string };
+    return fn.displayName || fn.name || "function";
+  }
+  if (typeof type === "object") {
+    const o = type as { displayName?: string; $$typeof?: symbol };
+    if (o.displayName) return o.displayName;
+    return "[object]";
+  }
+  return String(type);
+}
+
+function snapshotReturnChain(start: Fiber | null, max: number): unknown[] {
+  const out: unknown[] = [];
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < max; d++) {
+    const typ = f.elementType ?? f.type;
+    const s = getDebugSourceExtended(f);
+    const raw = s?.fileName ?? null;
+    const norm = raw ? normalizeDevPath(raw) : null;
+    out.push({
+      d,
+      tag: f.tag,
+      isHost: typeof typ === "string",
+      type: typeof typ === "string" ? typ : shortTypeDesc(typ),
+      name: getNameFromFiber(f),
+      rawFile: raw,
+      normFile: norm,
+      isTsxOrJsx: Boolean(norm && isTsxOrJsxPath(norm)),
+    });
+    f = f.return;
+  }
+  return out;
+}
+
+function snapshotOwnerChain(start: Fiber | null, max: number): unknown[] {
+  const out: unknown[] = [];
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < max; d++) {
+    if (typeof f.type !== "string") {
+      const s = getDebugSourceExtended(f);
+      const raw = s?.fileName ?? null;
+      const norm = raw ? normalizeDevPath(raw) : null;
+      out.push({
+        d,
+        tag: f.tag,
+        type: shortTypeDesc(f.elementType ?? f.type),
+        name: getNameFromFiber(f),
+        rawFile: raw,
+        normFile: norm,
+        isTsxOrJsx: Boolean(norm && isTsxOrJsxPath(norm)),
+      });
+    }
+    f = (f._debugOwner as Fiber | null) ?? null;
+  }
+  return out;
+}
+
 /**
  * Walk `return` (then `_debugOwner`) from the clicked fiber: innermost ancestor whose
  * debug path looks like a real component source (`.tsx` / `.jsx`). Anonymous inner
@@ -481,6 +559,37 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
 
   if (omitLine) {
     line = "?";
+  }
+
+  if (isPickerDebugEnabled()) {
+    const srcBeforeTsx =
+      getDebugSourceExtended(start) ||
+      walkDebugOwnersForSourceExtended(start) ||
+      walkReturnForSourceExtended(start) ||
+      (best ? walkReturnForSourceExtended(best) : null);
+    const tsxA = nearestTsxJsxSourceFromFiber(start);
+    const tsxB = best ? nearestTsxJsxSourceFromFiber(best) : null;
+    const hook = (globalThis as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__?: unknown })
+      .__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    console.info("[React Context Picker][fiber]", "resolvePickFromFiber", {
+      page: globalThis.location?.href,
+      reactDevToolsHook: Boolean(hook),
+      final: { file, line, name, omitLine },
+      guessNameFromPath_finalFile: guessNameFromPath(file),
+      names: {
+        nearestNonAnonymousNameOnly: nearestNonAnonymousNameOnly(start),
+        walkDebugOwnersForName: walkDebugOwnersForName(start),
+        resolveNameWalkingUp: resolveNameWalkingUp(start),
+      },
+      sources: {
+        srcWalkBeforeTsxNearest: srcBeforeTsx,
+        tsxNearest_fromStart: tsxA,
+        tsxNearest_fromBest: tsxB,
+        tsxNearest_used: tsxA ?? tsxB,
+      },
+      returnChain: snapshotReturnChain(start, 32),
+      ownerChain: snapshotOwnerChain(start, 16),
+    });
   }
 
   return { file, line, name, omitLine };

@@ -2,19 +2,12 @@ import {
   getFiberFromComposedPath,
   findBestFiber,
   getMemoizedProps,
+  isPickerDebugEnabled,
   resolvePickFromFiber,
   serializePropsForContext,
 } from "./fiber";
 
 const LOG_PREFIX = "[React Context Picker]";
-
-function isDebugEnabled(): boolean {
-  try {
-    return globalThis.localStorage?.getItem("REACT_CONTEXT_PICKER_DEBUG") === "1";
-  } catch {
-    return false;
-  }
-}
 
 function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromComposedPath>): string {
   const resolved = resolvePickFromFiber(fiber);
@@ -82,7 +75,7 @@ function wantsPickChord(ev: MouseEvent): boolean {
 let lastPickAt = 0;
 
 function tryPick(ev: MouseEvent, source: string): void {
-  if (isDebugEnabled()) {
+  if (isPickerDebugEnabled()) {
     console.info(LOG_PREFIX, source, {
       shiftKey: ev.shiftKey,
       altKey: ev.altKey,
@@ -134,6 +127,6 @@ window.addEventListener("mousedown", onMouseDown, { capture: true, passive: fals
 console.info(
   LOG_PREFIX,
   "content script loaded. Chords: Shift+Option / Shift+Alt, or Cmd+Shift (Mac) / Ctrl+Shift (Win).",
-  "Verbose logs: localStorage.setItem('REACT_CONTEXT_PICKER_DEBUG','1') then refresh.",
+  "Verbose logs: localStorage.setItem('REACT_CONTEXT_PICKER_DEBUG','1') then refresh (logs modifier + fiber resolution).",
   location.href,
 );
