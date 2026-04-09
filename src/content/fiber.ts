@@ -211,15 +211,78 @@ function getDebugSource(fiber: Fiber): { fileName?: string; lineNumber?: number 
   return null;
 }
 
-function walkDebugOwnersForSource(start: Fiber | null): ReturnType<typeof getDebugSource> {
-  let f: Fiber | null = start;
-  for (let d = 0; f && d < 40; d++) {
-    const s = getDebugSource(f);
-    if (s?.fileName) return s;
-    const owner = f._debugOwner as Fiber | null | undefined;
-    f = owner ?? null;
+/** React 19+ may stash paths on `_debugInfo`; some bundles omit `_debugSource` on inner fibers. */
+function getDebugSourceExtended(fiber: Fiber | null): ReturnType<typeof getDebugSource> | null {
+  if (!fiber) return null;
+  const base = getDebugSource(fiber);
+  if (base?.fileName) return base;
+  const di = fiber._debugInfo;
+  if (di && typeof di === "object" && !Array.isArray(di)) {
+    const o = di as Record<string, unknown>;
+    if (typeof o.fileName === "string") {
+      return {
+        fileName: o.fileName,
+        lineNumber: typeof o.lineNumber === "number" ? o.lineNumber : undefined,
+      };
+    }
   }
   return null;
+}
+
+function walkDebugOwnersForSourceExtended(
+  start: Fiber | null,
+): ReturnType<typeof getDebugSource> | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 60; d++) {
+    const s = getDebugSourceExtended(f);
+    if (s?.fileName) return s;
+    f = (f._debugOwner as Fiber | null) ?? null;
+  }
+  return null;
+}
+
+function walkReturnForSourceExtended(start: Fiber | null): ReturnType<typeof getDebugSource> | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 150; d++) {
+    const s = getDebugSourceExtended(f);
+    if (s?.fileName) return s;
+    f = f.return;
+  }
+  return null;
+}
+
+/** Innermost non-Anonymous name (return chain, then _debugOwner). */
+function nearestNonAnonymousNameOnly(start: Fiber | null): string | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 150; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const name = getNameFromFiber(f);
+    if (name && name !== "Anonymous") return name;
+    f = f.return;
+  }
+  let o: Fiber | null = start;
+  for (let d = 0; o && d < 80; d++) {
+    if (typeof o.type !== "string") {
+      const name = getNameFromFiber(o);
+      if (name && name !== "Anonymous") return name;
+    }
+    o = (o._debugOwner as Fiber | null) ?? null;
+  }
+  return null;
+}
+
+/** `edit-customer-form.tsx` → `EditCustomerForm` when React names are anonymous wrappers. */
+function guessNameFromPath(filePath: string): string | null {
+  const base = filePath.split("/").pop()?.replace(/\.(tsx?|jsx?|mjs|cjs|js)$/, "") ?? "";
+  if (!base || base === "index" || base === "unknown") return null;
+  const parts = base.split(/[-_.]/).filter(Boolean);
+  if (parts.length === 0) return null;
+  return parts
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+    .join("");
 }
 
 /**
@@ -234,7 +297,7 @@ export function findBestFiber(start: Fiber | null): Fiber | null {
   let depth = 0;
   while (f && depth < 80) {
     const name = getNameFromFiber(f);
-    const src = getDebugSource(f);
+    const src = getDebugSourceExtended(f);
     if (name && src) {
       return f;
     }
@@ -258,7 +321,7 @@ function nearestNonAnonymousWithFile(start: Fiber | null): { name: string; file:
       continue;
     }
     const name = getNameFromFiber(f);
-    const src = getDebugSource(f);
+    const src = getDebugSourceExtended(f);
     if (name && name !== "Anonymous" && src?.fileName) {
       return { name, file: normalizeDevPath(src.fileName) };
     }
@@ -268,7 +331,7 @@ function nearestNonAnonymousWithFile(start: Fiber | null): { name: string; file:
   for (let d = 0; o && d < 50; d++) {
     if (typeof o.type !== "string") {
       const name = getNameFromFiber(o);
-      const src = getDebugSource(o);
+      const src = getDebugSourceExtended(o);
       if (name && name !== "Anonymous" && src?.fileName) {
         return { name, file: normalizeDevPath(src.fileName) };
       }
@@ -282,37 +345,32 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
   file: string;
   line: string;
   name: string;
-  /** When true, format as `@file Name (route)` — no `:line` (parent fallback for anonymous leaves). */
+  /** When true, format as `@file Name (route)` — no `:line` (parent fallback / guessed name). */
   omitLine: boolean;
 } {
-  const best = findBestFiber(fiber);
-  if (!best) {
+  if (!fiber) {
     return { file: "unknown", line: "?", name: "Anonymous", omitLine: true };
   }
 
-  let name = resolveDisplayName(best);
+  const start = fiber;
+  const best = findBestFiber(fiber);
 
-  const walkForSource = (startFiber: Fiber | null): ReturnType<typeof getDebugSource> => {
-    let f: Fiber | null = startFiber;
-    let d = 0;
-    while (f && d < 100) {
-      const s = getDebugSource(f);
-      if (s?.fileName) return s;
-      f = f.return;
-      d++;
-    }
-    return null;
-  };
+  let name: string | null =
+    nearestNonAnonymousNameOnly(start) || walkDebugOwnersForName(start);
+
+  if (!name) {
+    const rw = resolveNameWalkingUp(start);
+    name = rw !== "Anonymous" ? rw : "Anonymous";
+  }
+
+  let src: ReturnType<typeof getDebugSource> | null =
+    getDebugSourceExtended(start) ||
+    walkDebugOwnersForSourceExtended(start) ||
+    walkReturnForSourceExtended(start) ||
+    (best ? walkReturnForSourceExtended(best) : null);
 
   let file = "unknown";
   let line: string = "?";
-  let omitLine = false;
-
-  const src =
-    getDebugSource(best) ||
-    walkDebugOwnersForSource(best) ||
-    walkForSource(best.return) ||
-    walkForSource(best);
   if (src?.fileName) {
     file = normalizeDevPath(src.fileName);
     if (typeof src.lineNumber === "number" && Number.isFinite(src.lineNumber)) {
@@ -320,27 +378,36 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     }
   }
 
-  if (file === "unknown") {
-    const onlySrc = walkForSource(best);
-    if (onlySrc?.fileName) {
-      file = normalizeDevPath(onlySrc.fileName);
-      if (typeof onlySrc.lineNumber === "number" && Number.isFinite(onlySrc.lineNumber)) {
-        line = String(onlySrc.lineNumber);
-      }
+  let omitLine = false;
+
+  if (name === "Anonymous" && file !== "unknown") {
+    const guessed = guessNameFromPath(file);
+    if (guessed) {
+      name = guessed;
+      omitLine = true;
     }
   }
 
-  const parentFallback = nearestNonAnonymousWithFile(best);
+  if (name === "Anonymous") {
+    const combo = nearestNonAnonymousWithFile(best);
+    if (combo) {
+      name = combo.name;
+      file = combo.file;
+      omitLine = true;
+      line = "?";
+    }
+  }
 
-  if (name === "Anonymous" && parentFallback) {
-    name = parentFallback.name;
-    file = parentFallback.file;
-    omitLine = true;
-    line = "?";
-  } else if (file === "unknown" && parentFallback) {
-    file = parentFallback.file;
-    name = parentFallback.name;
-    omitLine = true;
+  if (file === "unknown" && name === "Anonymous" && best) {
+    const combo = nearestNonAnonymousWithFile(best);
+    if (combo) {
+      name = combo.name;
+      file = combo.file;
+      omitLine = true;
+    }
+  }
+
+  if (omitLine) {
     line = "?";
   }
 
