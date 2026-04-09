@@ -14,6 +14,7 @@ export type PickCandidate = {
 export type PageWorldPickResult = {
   resolved: PickResolved;
   candidates: PickCandidate[];
+  leafName: string | null;
 };
 
 let loadPromise: Promise<void> | null = null;
@@ -87,6 +88,7 @@ export async function resolvePickViaPageWorld(ev: MouseEvent): Promise<PageWorld
       resolve({
         resolved: e.data.resolved as PickResolved,
         candidates: Array.isArray(e.data.candidates) ? (e.data.candidates as PickCandidate[]) : [],
+        leafName: typeof e.data.leafName === "string" ? e.data.leafName : null,
       });
     };
 

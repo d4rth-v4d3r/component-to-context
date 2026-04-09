@@ -4,6 +4,7 @@ import {
   getMemoizedProps,
   isPickerDebugEnabled,
   logFiberLookupMiss,
+  nearestLeafNamedWithFile,
   resolvePickFromFiber,
   serializePropsForContext,
 } from "./fiber";
@@ -28,31 +29,87 @@ function lineSuffix(line: string): string {
   return line !== "?" && Number.isFinite(Number(line)) ? `:${line}` : "";
 }
 
+function pascalFromFilePath(filePath: string): string | null {
+  const segs = filePath.replace(/\\/g, "/").split("/").filter(Boolean);
+  let base = (segs[segs.length - 1] ?? "").replace(/\.(tsx?|jsx?|mjs|cjs|js)$/i, "");
+  if (base === "index" && segs.length > 1) base = segs[segs.length - 2] ?? base;
+  if (!base || base === "unknown") return null;
+  const parts = base.split(/[-_.]/).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("");
+}
+
+function dropdownDisplayName(c: PickCandidate): string {
+  const GENERIC = new Set([
+    "Grid",
+    "Box",
+    "Stack",
+    "Dialog",
+    "DialogContent",
+    "DialogTitle",
+    "DialogActions",
+    "FormControl",
+    "TextField",
+    "Button",
+    "IconButton",
+    "Typography",
+    "Container",
+    "Paper",
+    "Card",
+  ]);
+  const current = c.resolved.name;
+  const fromFile = pascalFromFilePath(c.resolved.file);
+  if (!fromFile) return current;
+  if (GENERIC.has(current) || current === "Anonymous") return fromFile;
+  return current;
+}
+
 /**
  * Build shortest unique display paths from candidate files.
- * No hardcoded `src`: we compute a minimal unique tail for each path.
+ * No hardcoded `src`: strip shared leading prefix, then bounded unique tails.
  */
 function buildShortDisplayPathMap(candidates: PickCandidate[]): Map<string, string> {
-  const split = (p: string): string[] => p.split("/").filter(Boolean);
+  const split = (p: string): string[] =>
+    p
+      .replace(/\\/g, "/")
+      .replace(/^file:\/\//i, "")
+      .replace(/^webpack(-internal)?:\/\//i, "")
+      .split("/")
+      .filter(Boolean);
   const files = candidates.map((c) => c.resolved.file);
-  const segments = files.map(split);
+  const rawSegments = files.map(split);
   const out = new Map<string, string>();
 
+  if (files.length === 0) return out;
+
+  // User-requested explicit roots for display, in priority order.
+  const ANCHORS = ["src", "pages", "app", "routes"];
+  const FALLBACK_MAX_SEGMENTS = 4;
+
   for (let i = 0; i < files.length; i++) {
-    const segs = segments[i];
-    let use = segs.length;
-    for (let n = 1; n <= segs.length; n++) {
-      const tail = segs.slice(-n).join("/");
-      const unique = segments.every((other, j) => {
-        if (j === i) return true;
-        return other.slice(-n).join("/") !== tail;
-      });
-      if (unique) {
-        use = n;
-        break;
-      }
+    const segs = rawSegments[i];
+    if (segs.length === 0) {
+      out.set(files[i], files[i]);
+      continue;
     }
-    out.set(files[i], segs.slice(-use).join("/") || files[i]);
+
+    const lower = segs.map((x) => x.toLowerCase());
+    let idx = -1;
+    for (const a of ANCHORS) {
+      const at = lower.indexOf(a);
+      if (at !== -1 && (idx === -1 || at < idx)) idx = at;
+    }
+
+    if (idx !== -1) {
+      // Always show from anchor when present (e.g. src/components/Button.tsx).
+      out.set(files[i], segs.slice(idx).join("/"));
+      continue;
+    }
+
+    // Fallback for non-app sources: keep a short tail.
+    const shown = segs.slice(-FALLBACK_MAX_SEGMENTS).join("/");
+    const needsEllipsis = segs.length > FALLBACK_MAX_SEGMENTS;
+    out.set(files[i], needsEllipsis ? `.../${shown}` : shown);
   }
 
   return out;
@@ -75,7 +132,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | nu
       "width:min(780px,92vw);background:#111827;color:#f9fafb;border:1px solid #374151;border-radius:12px;padding:12px;box-shadow:0 12px 28px rgba(0,0,0,.45);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;";
 
     const title = document.createElement("div");
-    title.textContent = "React Context Picker: select parent component";
+    title.textContent = "React Context Picker: select component/file target";
     title.style.cssText = "font-weight:700;margin-bottom:8px;";
     panel.appendChild(title);
 
@@ -92,7 +149,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | nu
       const left = document.createElement("div");
       left.style.cssText = "min-width:0;";
       const name = document.createElement("div");
-      name.textContent = c.resolved.name;
+      name.textContent = dropdownDisplayName(c);
       name.style.cssText = "font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
       const file = document.createElement("div");
       const shortPath = shortPathMap.get(c.resolved.file) ?? c.resolved.file;
@@ -179,13 +236,15 @@ function pickComponentText(fiber: ReturnType<typeof getFiberFromComposedPath>): 
 function formatBlock(
   fiber: ReturnType<typeof getFiberFromComposedPath>,
   resolvedOverride?: PickResolved,
+  nameOverride?: string | null,
 ): string {
   const resolved = resolvedOverride ?? resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
   const linePart =
     resolved.line !== "?" && Number.isFinite(Number(resolved.line)) ? `:${resolved.line}` : "";
   const componentText = pickComponentText(fiber);
-  const primary = `@${filePart}${linePart} ${resolved.name}("${componentText}") - `;
+  const copyName = nameOverride || nearestLeafNamedWithFile(fiber) || resolved.name;
+  const primary = `@${filePart}${linePart} ${copyName}("${componentText}") - `;
 
   const best = findBestFiber(fiber);
   const props = getMemoizedProps(best);
@@ -272,6 +331,7 @@ function tryPick(ev: MouseEvent, source: string): void {
   void (async () => {
     let fiber = getFiberFromComposedPath(ev);
     let resolved: PickResolved = resolvePickFromFiber(fiber);
+    let leafNameForCopy: string | null = nearestLeafNamedWithFile(fiber);
 
     const needPageWorld =
       !fiber || (resolved.file === "unknown" && resolved.name === "Anonymous");
@@ -288,14 +348,15 @@ function tryPick(ev: MouseEvent, source: string): void {
         ) {
           const chosen = await chooseCandidate(fromPage.candidates);
           resolved = chosen ?? fromPage.resolved;
+          leafNameForCopy = fromPage.leafName ?? leafNameForCopy;
           if (isPickerDebugEnabled()) {
             console.info(LOG_PREFIX, "page_world_resolve", {
               resolved,
               candidates: fromPage.candidates.map((c) => ({
-                name: c.resolved.name,
                 file: `${c.resolved.file}${lineSuffix(c.resolved.line)}`,
                 layer: c.layer,
               })),
+              leafNameForCopy,
             });
           }
         }
@@ -306,7 +367,7 @@ function tryPick(ev: MouseEvent, source: string): void {
       }
     }
 
-    const block = formatBlock(fiber, resolved);
+    const block = formatBlock(fiber, resolved, leafNameForCopy);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK", block })

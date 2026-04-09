@@ -351,6 +351,110 @@ function nearestNonAnonymousNameOnly(start: Fiber | null): string | null {
   return null;
 }
 
+/** Nearest named non-anonymous component from clicked leaf that has a debug file. */
+export function nearestLeafNamedWithFile(start: Fiber | null): string | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 180; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const n = getNameFromFiber(f);
+    const s = getDebugSourceExtended(f);
+    if (n && n !== "Anonymous" && s?.fileName) return n;
+    f = f.return;
+  }
+  let o: Fiber | null = start;
+  for (let d = 0; o && d < 80; d++) {
+    if (typeof o.type !== "string") {
+      const n = getNameFromFiber(o);
+      const s = getDebugSourceExtended(o);
+      if (n && n !== "Anonymous" && s?.fileName) return n;
+    }
+    o = (o._debugOwner as Fiber | null) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Walk upward and return the outermost named component that still maps to the same source file.
+ * Useful when nested JSX in one file should collapse to the top-level parent component.
+ */
+export function resolveOutermostNamedInSameFile(start: Fiber | null): {
+  name: string;
+  file: string;
+  line: string;
+} | null {
+  if (!start) return null;
+
+  const best = findBestFiber(start);
+  const baseSrc =
+    nearestTsxJsxSourceFromFiber(start) ||
+    nearestTsxJsxSourceFromFiber(best) ||
+    getDebugSourceExtended(start) ||
+    walkReturnForSourceExtended(start);
+  if (!baseSrc?.fileName) return null;
+  const baseFile = normalizeDevPath(baseSrc.fileName);
+
+  const GENERIC_RUNTIME_NAMES = new Set([
+    "Provider",
+    "FormProvider",
+    "Box",
+    "Grid",
+    "Stack",
+    "Dialog",
+    "DialogContent",
+    "DialogTitle",
+    "DialogActions",
+    "TextField",
+    "Button",
+    "IconButton",
+    "Typography",
+    "Container",
+    "Paper",
+    "Card",
+    "Fragment",
+  ]);
+
+  const preferred: Array<{ name: string; file: string; line: string; depth: number }> = [];
+  const generic: Array<{ name: string; file: string; line: string; depth: number }> = [];
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 220; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const n = getNameFromFiber(f);
+    const s = getDebugSourceExtended(f);
+    if (!n || n === "Anonymous" || !s?.fileName) {
+      f = f.return;
+      continue;
+    }
+    const currentFile = normalizeDevPath(s.fileName);
+    if (currentFile === baseFile) {
+      const entry = {
+        name: n,
+        file: currentFile,
+        line: typeof s.lineNumber === "number" && Number.isFinite(s.lineNumber) ? String(s.lineNumber) : "?",
+        depth: d,
+      };
+      if (GENERIC_RUNTIME_NAMES.has(n)) {
+        generic.push(entry);
+      } else {
+        preferred.push(entry);
+      }
+    }
+    f = f.return;
+  }
+  // Keep same-file boundary behavior, but prefer non-generic component names (e.g. MyForm).
+  // Outermost = largest depth in the return chain.
+  const pool = preferred.length ? preferred : generic;
+  if (!pool.length) return null;
+  pool.sort((a, b) => b.depth - a.depth);
+  const bestEntry = pool[0];
+  return { name: bestEntry.name, file: bestEntry.file, line: bestEntry.line };
+}
+
 function isTsxOrJsxPath(filePath: string): boolean {
   return /\.(tsx|jsx)$/i.test(filePath);
 }

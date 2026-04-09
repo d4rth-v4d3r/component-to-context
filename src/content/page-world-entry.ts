@@ -3,7 +3,13 @@
  * Chrome content scripts are isolated — they cannot read `__reactFiber$` on DOM nodes.
  * This bundle shares the page's realm and reuses fiber resolution from `./fiber`.
  */
-import { getFiberFromNode, getFiberFromHostInstance, resolvePickFromFiber } from "./fiber";
+import {
+  getFiberFromNode,
+  getFiberFromHostInstance,
+  nearestLeafNamedWithFile,
+  resolveOutermostNamedInSameFile,
+  resolvePickFromFiber,
+} from "./fiber";
 
 const MSG_GET = "__rcp__get_fiber";
 const MSG_RESULT = "__rcp__fiber_result";
@@ -30,6 +36,33 @@ type PickCandidate = {
   pathIndex: number;
   score: number;
 };
+
+function isLocalProjectFile(file: string): boolean {
+  if (!file || file === "unknown") return false;
+  const p = file.replace(/\\/g, "/");
+  // Exclude obvious external/library sources.
+  if (
+    p.includes("/node_modules/") ||
+    p.startsWith("node_modules/") ||
+    p.includes("../node_modules/") ||
+    p.includes("../../node_modules/") ||
+    p.startsWith("http://") ||
+    p.startsWith("https://")
+  ) {
+    return false;
+  }
+  const lower = p.toLowerCase();
+  return (
+    lower.includes("/src/") ||
+    lower.startsWith("src/") ||
+    lower.includes("/pages/") ||
+    lower.startsWith("pages/") ||
+    lower.includes("/app/") ||
+    lower.startsWith("app/") ||
+    lower.includes("/routes/") ||
+    lower.startsWith("routes/")
+  );
+}
 
 function classifyLayer(node: Node): "page" | "dialog" | "form" | "none" {
   const el = node instanceof Element ? node : node.parentElement;
@@ -96,8 +129,21 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
 
     const layer = classifyLayer(node);
     const score = layerScore(layer) - i;
-    const resolved = resolvePickFromFiber(fiber);
-    if (resolved.file === "unknown" && resolved.name === "Anonymous") continue;
+    const resolvedBase = resolvePickFromFiber(fiber);
+    const outerNamed = resolveOutermostNamedInSameFile(fiber);
+    const resolved = outerNamed
+      ? {
+          ...resolvedBase,
+          name: outerNamed.name,
+          file: outerNamed.file,
+          line: outerNamed.line,
+          omitLine: outerNamed.line === "?",
+        }
+      : resolvedBase;
+    // Strict list rule: show only named, non-anonymous entries with a valid local project file.
+    if (resolved.name === "Anonymous" || resolved.file === "unknown" || !isLocalProjectFile(resolved.file)) {
+      continue;
+    }
 
     const key = `${resolved.file}|${resolved.line}|${resolved.name}`;
     if (seen.has(key)) continue;
@@ -105,8 +151,19 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     out.push({ resolved, layer, pathIndex: i, score });
   }
 
-  out.sort((a, b) => b.score - a.score);
-  return out.slice(0, 10);
+  // Collapse repeats from same file: keep the outermost candidate in that file.
+  const byFile = new Map<string, PickCandidate>();
+  for (const c of out) {
+    const prev = byFile.get(c.resolved.file);
+    if (!prev || c.pathIndex > prev.pathIndex) {
+      byFile.set(c.resolved.file, c);
+    }
+  }
+
+  const uniq = [...byFile.values()];
+  // File list order remains nearest-first across different files.
+  uniq.sort((a, b) => a.pathIndex - b.pathIndex);
+  return uniq.slice(0, 10);
 }
 
 function handleMessage(ev: MessageEvent): void {
@@ -125,7 +182,8 @@ function handleMessage(ev: MessageEvent): void {
   }
 
   const resolved = resolvePickFromFiber(fiber);
-  window.postMessage({ type: MSG_RESULT, requestId, resolved, candidates }, "*");
+  const leafName = nearestLeafNamedWithFile(fiber);
+  window.postMessage({ type: MSG_RESULT, requestId, resolved, candidates, leafName }, "*");
 }
 
 if (!(document.documentElement as HTMLElement).dataset.rcpPageWorld) {
