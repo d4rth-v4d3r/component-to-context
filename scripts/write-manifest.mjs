@@ -6,47 +6,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const dist = resolve(root, "dist");
 
-const DEV_PORTS = [
-  3000, 3001, 3500, 4000, 4173, 5000, 5173, 5174, 8080, 8081, 8888, 9000, 1355, 9323,
-];
-
-const schemes = ["http", "https"];
-
 /**
- * Chrome `*.localhost` matches only **one** label (`foo.localhost`), not
- * `a.b.localhost`. Dev URLs like `x.y.web-ui.localhost` need `*.*.localhost`, etc.
+ * Chrome match patterns allow at most one `*` in the host (`*.localhost` is OK;
+ * `*.*.localhost` is invalid → "Invalid host wildcard").
+ *
+ * A single host wildcard with no port matches **any host and any port** for http/https:
+ * @see https://developer.chrome.com/docs/extensions/mv3/match_patterns
+ *
+ * Dev-only unpacked extension: broad patterns so nested hosts like
+ * `a.b.web-ui.localhost:1355` work without listing every depth.
  */
-const LOCALHOST_LABEL_DEPTH = 6;
-
-/** @type {Set<string>} */
-const matches = new Set();
-
-function add(p) {
-  matches.add(p);
-}
-
-for (const scheme of schemes) {
-  add(`${scheme}://localhost/*`);
-  add(`${scheme}://127.0.0.1/*`);
-}
-
-for (let depth = 1; depth <= LOCALHOST_LABEL_DEPTH; depth++) {
-  const host = `${Array(depth).fill("*").join(".")}.localhost`;
-  for (const scheme of schemes) {
-    add(`${scheme}://${host}/*`);
-  }
-}
-
-for (const port of DEV_PORTS) {
-  for (const scheme of schemes) {
-    add(`${scheme}://localhost:${port}/*`);
-    add(`${scheme}://127.0.0.1:${port}/*`);
-    for (let depth = 1; depth <= LOCALHOST_LABEL_DEPTH; depth++) {
-      const host = `${Array(depth).fill("*").join(".")}.localhost`;
-      add(`${scheme}://${host}:${port}/*`);
-    }
-  }
-}
+const matches = ["http://*/*", "https://*/*"];
 
 const manifest = {
   manifest_version: 3,
@@ -79,4 +49,4 @@ const manifest = {
 
 writeFileSync(resolve(dist, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-console.log("Wrote dist/manifest.json with", matches.size, "match patterns.");
+console.log("Wrote dist/manifest.json with", matches.length, "match patterns (http/* + https/*).");

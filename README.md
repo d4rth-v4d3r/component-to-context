@@ -49,11 +49,11 @@ Then reload the extension in Chrome after each rebuild (see below).
 
 ## Allowed URLs
 
-The generated `manifest.json` matches `localhost`, `127.0.0.1`, and **multi-level** `*.localhost` hosts (Chrome’s `*.localhost` alone only matches **one** label; URLs like `a.b.web-ui.localhost` need `*.*.localhost`, which this script generates up to **six** labels).
+The generated `manifest.json` uses **`http://*/*`** and **`https://*/*`**. Chrome does not allow patterns like `*.*.localhost` (invalid host wildcard), and a single `*.localhost` only matches one subdomain label. Broad `http(s)://*/*` matches **any host and port** (including nested `*.web-ui.localhost` and custom ports) so local dev URLs work without maintaining a giant port list.
 
-**Explicit ports** include: `3000`, `3001`, `3500`, `4000`, `4173`, `5000`, `5173`, `5174`, `8080`, `8081`, `8888`, `9000`, `1355`, `9323`, plus default **80** / **443** for bare `localhost` / `127.0.0.1` patterns.
+This is intentionally **dev-only**; do not ship this pattern to the Web Store without narrowing.
 
-If your dev server uses **another port**, add it to the `DEV_PORTS` array in [`scripts/write-manifest.mjs`](scripts/write-manifest.mjs), run **`npm run build`** again, and use **Reload** on the extension in `chrome://extensions`.
+If you want to restrict origins later, replace those entries in [`scripts/write-manifest.mjs`](scripts/write-manifest.mjs) with explicit host patterns Chrome accepts, then **`npm run build`** and **Reload** the extension.
 
 ## Updating after code changes
 
