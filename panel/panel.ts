@@ -161,11 +161,76 @@ async function writeItems(next: PickItem[]): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: next });
 }
 
+/** True if list layout / card chrome must be rebuilt (anything except `prompt` text). */
+function needsStructuralListRerender(prev: PickItem[], next: PickItem[]): boolean {
+  if (prev.length !== next.length) return true;
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i];
+    const b = next[i];
+    if (a.id !== b.id) return true;
+    if ((a.status ?? "pending") !== (b.status ?? "pending")) return true;
+    if ((a.includeProps ?? false) !== (b.includeProps ?? false)) return true;
+    if ((a.includeState ?? false) !== (b.includeState ?? false)) return true;
+    if (a.file !== b.file) return true;
+    if (a.line !== b.line) return true;
+    if (a.componentName !== b.componentName) return true;
+    if (a.textContent !== b.textContent) return true;
+    if (a.url !== b.url) return true;
+    if (a.selectionKind !== b.selectionKind) return true;
+    if (a.propsText !== b.propsText) return true;
+    if (a.stateText !== b.stateText) return true;
+    if (a.anchorXPath !== b.anchorXPath) return true;
+    if (a.sourceTabId !== b.sourceTabId) return true;
+  }
+  return false;
+}
+
+function activePromptTextarea(): HTMLTextAreaElement | null {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLTextAreaElement) || !el.classList.contains("prompt")) return null;
+  return listsWrap.contains(el) ? el : null;
+}
+
+function syncPromptTextareasFromItems(): void {
+  for (const ta of listsWrap.querySelectorAll<HTMLTextAreaElement>("textarea.prompt")) {
+    const id = ta.dataset.id;
+    if (!id) continue;
+    const it = items.find((x) => x.id === id);
+    if (it && ta.value !== it.prompt) ta.value = it.prompt;
+  }
+}
+
+const promptPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function schedulePersistPrompt(id: string, prompt: string): void {
+  const prev = promptPersistTimers.get(id);
+  if (prev != null) clearTimeout(prev);
+  promptPersistTimers.set(
+    id,
+    setTimeout(() => {
+      promptPersistTimers.delete(id);
+      void chrome.runtime.sendMessage({ type: "UPDATE_PICK_PROMPT", id, prompt });
+    }, 450),
+  );
+}
+
+function flushPersistPrompt(id: string, prompt: string): void {
+  const t = promptPersistTimers.get(id);
+  if (t != null) {
+    clearTimeout(t);
+    promptPersistTimers.delete(id);
+  }
+  void chrome.runtime.sendMessage({ type: "UPDATE_PICK_PROMPT", id, prompt });
+}
+
 function render(): void {
   const active = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
   const activeId = active?.dataset.id ?? null;
   const selStart = active?.selectionStart ?? null;
   const selEnd = active?.selectionEnd ?? null;
+
+  const scrollPending = panelPending.scrollTop;
+  const scrollDone = panelDone.scrollTop;
 
   const pending = items.filter((x) => (x.status ?? "pending") === "pending");
   const done = items.filter((x) => (x.status ?? "pending") === "done");
@@ -178,6 +243,9 @@ function render(): void {
 
   panelPending.innerHTML = pending.length ? pending.map((x) => renderCard(x)).join("") : emptyPending;
   panelDone.innerHTML = done.length ? done.map((x) => renderCard(x)).join("") : emptyDone;
+
+  panelPending.scrollTop = scrollPending;
+  panelDone.scrollTop = scrollDone;
 
   undoBtn.classList.toggle("hidden", lastSentBatchIds.length === 0);
 
@@ -287,12 +355,26 @@ listsWrap.addEventListener("click", (e) => {
 
 listsWrap.addEventListener("input", (e) => {
   const t = e.target as HTMLElement;
-  if (!(t instanceof HTMLTextAreaElement)) return;
+  if (!(t instanceof HTMLTextAreaElement) || !t.classList.contains("prompt")) return;
   if (t.disabled) return;
   const id = t.dataset.id;
   if (!id) return;
-  void chrome.runtime.sendMessage({ type: "UPDATE_PICK_PROMPT", id, prompt: t.value });
+  const idx = items.findIndex((x) => x.id === id);
+  if (idx >= 0) items[idx] = { ...items[idx], prompt: t.value };
+  schedulePersistPrompt(id, t.value);
 });
+
+listsWrap.addEventListener(
+  "blur",
+  (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLTextAreaElement) || !t.classList.contains("prompt")) return;
+    const id = t.dataset.id;
+    if (!id) return;
+    flushPersistPrompt(id, t.value);
+  },
+  true,
+);
 
 /** Any focus inside a card (prompt, ⌖, toggles) keeps / shows the page highlight. */
 listsWrap.addEventListener(
@@ -347,7 +429,26 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   const oldIds = new Set(oldVal.map((x) => x.id));
   const hasNewPick = newVal.some((x) => !oldIds.has(x.id));
 
-  items = newVal.map((x) => ({ ...x, status: x.status ?? "pending" }));
+  const nextItems = newVal.map((x) => ({
+    ...x,
+    status: x.status ?? "pending",
+    includeProps: x.includeProps ?? false,
+    includeState: x.includeState ?? false,
+  }));
+
+  if (!needsStructuralListRerender(items, nextItems)) {
+    const ta = activePromptTextarea();
+    if (ta) {
+      const activeId = ta.dataset.id;
+      items = nextItems.map((it) => (it.id === activeId ? { ...it, prompt: ta.value } : it));
+      return;
+    }
+    items = nextItems;
+    syncPromptTextareasFromItems();
+    return;
+  }
+
+  items = nextItems;
   prevItemIds = new Set(items.map((x) => x.id));
 
   if (hasNewPick) {
