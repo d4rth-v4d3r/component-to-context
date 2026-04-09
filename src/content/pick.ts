@@ -11,11 +11,32 @@ import { resolvePickViaPageWorld, type PickResolved } from "./page-world-bridge"
 
 const LOG_PREFIX = "[React Context Picker]";
 
-/** Paste line: literal `URL` keyword plus pathname+search (not the full href). */
-function pickLocationLabel(): string {
-  if (typeof window === "undefined") return "(URL - )";
-  const path = `${window.location.pathname}${window.location.search}`;
-  return `(URL - ${path})`;
+function pickUrlPath(): string {
+  if (typeof window === "undefined") return "";
+  return `${window.location.pathname}${window.location.search}`;
+}
+
+function escapedOneLine(s: string): string {
+  return s.replace(/\s+/g, " ").replace(/"/g, '\\"').trim();
+}
+
+/** Prefer clicked node text; if empty, walk up to nearest ancestor with readable text. */
+function pickComponentText(fiber: ReturnType<typeof getFiberFromComposedPath>): string {
+  const best = findBestFiber(fiber);
+  const hostNode = (best?.stateNode as Node | null) ?? null;
+  let el: Element | null = null;
+  if (hostNode instanceof Element) el = hostNode;
+  else if (hostNode instanceof Text) el = hostNode.parentElement;
+  if (!el) return "";
+
+  let cur: Element | null = el;
+  for (let i = 0; cur && i < 5; i++) {
+    const raw = cur.textContent ?? "";
+    const one = escapedOneLine(raw);
+    if (one) return one.length > 140 ? `${one.slice(0, 140)}…` : one;
+    cur = cur.parentElement;
+  }
+  return "";
 }
 
 function formatBlock(
@@ -24,17 +45,18 @@ function formatBlock(
 ): string {
   const resolved = resolvedOverride ?? resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
-  const where = pickLocationLabel();
-  const primary = resolved.omitLine
-    ? `@${filePart} ${resolved.name} ${where} - `
-    : `@${filePart}:${resolved.line} ${resolved.name} ${where} - `;
+  const linePart =
+    resolved.line !== "?" && Number.isFinite(Number(resolved.line)) ? `:${resolved.line}` : "";
+  const componentText = pickComponentText(fiber);
+  const primary = `@${filePart}${linePart} ${resolved.name}("${componentText}") - `;
 
   const best = findBestFiber(fiber);
   const props = getMemoizedProps(best);
   const json = serializePropsForContext(props);
-  if (!json) return primary;
+  const urlLine = `Additional info:\n- URL: ${pickUrlPath()}`;
+  if (!json) return `${primary}\n${urlLine}`;
 
-  return `${primary}\n\nAdditional context:\n- Props: ${json}`;
+  return `${primary}\n${urlLine}\n- Props: ${json}`;
 }
 
 /**
