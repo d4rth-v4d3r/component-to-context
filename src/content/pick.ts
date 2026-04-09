@@ -11,16 +11,23 @@ import { resolvePickViaPageWorld, type PickResolved } from "./page-world-bridge"
 
 const LOG_PREFIX = "[React Context Picker]";
 
+/** Paste line: literal `URL` keyword plus pathname+search (not the full href). */
+function pickLocationLabel(): string {
+  if (typeof window === "undefined") return "(URL - )";
+  const path = `${window.location.pathname}${window.location.search}`;
+  return `(URL - ${path})`;
+}
+
 function formatBlock(
-  route: string,
   fiber: ReturnType<typeof getFiberFromComposedPath>,
   resolvedOverride?: PickResolved,
 ): string {
   const resolved = resolvedOverride ?? resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
+  const where = pickLocationLabel();
   const primary = resolved.omitLine
-    ? `@${filePart} ${resolved.name} (${route}) - `
-    : `@${filePart}:${resolved.line} ${resolved.name} (${route}) - `;
+    ? `@${filePart} ${resolved.name} ${where} - `
+    : `@${filePart}:${resolved.line} ${resolved.name} ${where} - `;
 
   const best = findBestFiber(fiber);
   const props = getMemoizedProps(best);
@@ -103,11 +110,6 @@ function tryPick(ev: MouseEvent, source: string): void {
   ev.stopPropagation();
   ev.stopImmediatePropagation();
 
-  const route =
-    typeof window !== "undefined"
-      ? `${window.location.pathname}${window.location.search}`
-      : "";
-
   void (async () => {
     let fiber = getFiberFromComposedPath(ev);
     let resolved: PickResolved = resolvePickFromFiber(fiber);
@@ -134,7 +136,7 @@ function tryPick(ev: MouseEvent, source: string): void {
       }
     }
 
-    const block = formatBlock(route, fiber, resolved);
+    const block = formatBlock(fiber, resolved);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK", block })

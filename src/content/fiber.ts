@@ -417,14 +417,12 @@ function snapshotOwnerChain(start: Fiber | null, max: number): unknown[] {
 }
 
 /**
- * Walk `return` (then `_debugOwner`) from the clicked fiber: innermost ancestor whose
- * debug path looks like a real component source (`.tsx` / `.jsx`). Anonymous inner
- * fibers often only have chunk paths; parents still point at the real file.
+ * Innermost fiber (walking `return`, then `_debugOwner`) whose debug path ends in
+ * `.tsx`/`.jsx` — same anchor we use for the picked **file**; **name** should align
+ * with this fiber (walk up for first non-Anonymous component).
  */
-function nearestTsxJsxSourceFromFiber(
-  start: Fiber | null,
-): ReturnType<typeof getDebugSource> | null {
-  const tryFiber = (f: Fiber | null): ReturnType<typeof getDebugSource> | null => {
+function findNearestTsxFiber(start: Fiber | null): Fiber | null {
+  const tryChain = (f: Fiber | null): Fiber | null => {
     let x: Fiber | null = f;
     for (let d = 0; x && d < 150; d++) {
       if (typeof x.type === "string") {
@@ -434,12 +432,7 @@ function nearestTsxJsxSourceFromFiber(
       const s = getDebugSourceExtended(x);
       if (s?.fileName) {
         const norm = normalizeDevPath(s.fileName);
-        if (isTsxOrJsxPath(norm)) {
-          return {
-            fileName: s.fileName,
-            lineNumber: typeof s.lineNumber === "number" ? s.lineNumber : undefined,
-          };
-        }
+        if (isTsxOrJsxPath(norm)) return x;
       }
       x = x.return;
     }
@@ -449,15 +442,37 @@ function nearestTsxJsxSourceFromFiber(
         const s = getDebugSourceExtended(o);
         if (s?.fileName) {
           const norm = normalizeDevPath(s.fileName);
-          if (isTsxOrJsxPath(norm)) return s;
+          if (isTsxOrJsxPath(norm)) return o;
         }
       }
       o = (o._debugOwner as Fiber | null) ?? null;
     }
     return null;
   };
+  return tryChain(start);
+}
 
-  return tryFiber(start);
+function nearestTsxJsxSourceFromFiber(
+  start: Fiber | null,
+): ReturnType<typeof getDebugSource> | null {
+  const f = findNearestTsxFiber(start);
+  return f ? getDebugSourceExtended(f) : null;
+}
+
+/** From this fiber, walk `return` for the first non-host component with a real display name. */
+function nameAlignedToFileFiber(tsxFiber: Fiber | null): string | null {
+  if (!tsxFiber) return null;
+  let f: Fiber | null = tsxFiber;
+  for (let d = 0; f && d < 150; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const n = getNameFromFiber(f);
+    if (n && n !== "Anonymous") return n;
+    f = f.return;
+  }
+  return null;
 }
 
 /** `edit-customer-form.tsx` → `EditCustomerForm` when React names are anonymous wrappers. */
@@ -539,7 +554,7 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
   file: string;
   line: string;
   name: string;
-  /** When true, format as `@file Name (route)` — no `:line` (parent fallback / guessed name). */
+  /** When true, format as `@file Name (location)` — no `:line` (guessed name from path). */
   omitLine: boolean;
 } {
   if (!fiber) {
@@ -549,13 +564,8 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
   const start = fiber;
   const best = findBestFiber(fiber);
 
-  let name: string | null =
-    nearestNonAnonymousNameOnly(start) || walkDebugOwnersForName(start);
-
-  if (!name) {
-    const rw = resolveNameWalkingUp(start);
-    name = rw !== "Anonymous" ? rw : "Anonymous";
-  }
+  /** Fiber that owns the `.tsx`/`.jsx` path we show — name should match this parent, not the leaf. */
+  const tsxFiber = findNearestTsxFiber(start) || findNearestTsxFiber(best);
 
   let src: ReturnType<typeof getDebugSource> | null =
     getDebugSourceExtended(start) ||
@@ -563,11 +573,19 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     walkReturnForSourceExtended(start) ||
     (best ? walkReturnForSourceExtended(best) : null);
 
-  /** Innermost fiber whose debug path ends in `.tsx`/`.jsx` (walks up from leaf). */
-  const tsxNearest =
-    nearestTsxJsxSourceFromFiber(start) || nearestTsxJsxSourceFromFiber(best);
-  if (tsxNearest?.fileName) {
-    src = tsxNearest;
+  if (tsxFiber) {
+    const s = getDebugSourceExtended(tsxFiber);
+    if (s?.fileName) {
+      const norm = normalizeDevPath(s.fileName);
+      if (isTsxOrJsxPath(norm)) {
+        src = s;
+      }
+    }
+  } else {
+    const tsxSrc = nearestTsxJsxSourceFromFiber(start) || nearestTsxJsxSourceFromFiber(best);
+    if (tsxSrc?.fileName) {
+      src = tsxSrc;
+    }
   }
 
   let file = "unknown";
@@ -579,13 +597,36 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     }
   }
 
+  let name: string;
   let omitLine = false;
 
-  if (name === "Anonymous" && file !== "unknown") {
-    const guessed = guessNameFromPath(file);
-    if (guessed) {
+  if (tsxFiber) {
+    const guessed = file !== "unknown" ? guessNameFromPath(file) : null;
+    const aligned = nameAlignedToFileFiber(tsxFiber);
+    const fromOwner = walkDebugOwnersForName(tsxFiber);
+    if (aligned) {
+      name = aligned;
+    } else if (fromOwner) {
+      name = fromOwner;
+    } else if (guessed) {
       name = guessed;
       omitLine = true;
+    } else {
+      name = "Anonymous";
+    }
+  } else {
+    let n: string | null = nearestNonAnonymousNameOnly(start) || walkDebugOwnersForName(start);
+    if (!n) {
+      const rw = resolveNameWalkingUp(start);
+      n = rw !== "Anonymous" ? rw : "Anonymous";
+    }
+    name = n;
+    if (name === "Anonymous" && file !== "unknown") {
+      const guessed = guessNameFromPath(file);
+      if (guessed) {
+        name = guessed;
+        omitLine = true;
+      }
     }
   }
 
