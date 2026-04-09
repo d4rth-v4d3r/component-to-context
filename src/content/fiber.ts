@@ -274,9 +274,65 @@ function nearestNonAnonymousNameOnly(start: Fiber | null): string | null {
   return null;
 }
 
+function isTsxOrJsxPath(filePath: string): boolean {
+  return /\.(tsx|jsx)$/i.test(filePath);
+}
+
+/**
+ * Walk `return` (then `_debugOwner`) from the clicked fiber: innermost ancestor whose
+ * debug path looks like a real component source (`.tsx` / `.jsx`). Anonymous inner
+ * fibers often only have chunk paths; parents still point at the real file.
+ */
+function nearestTsxJsxSourceFromFiber(
+  start: Fiber | null,
+): ReturnType<typeof getDebugSource> | null {
+  const tryFiber = (f: Fiber | null): ReturnType<typeof getDebugSource> | null => {
+    let x: Fiber | null = f;
+    for (let d = 0; x && d < 150; d++) {
+      if (typeof x.type === "string") {
+        x = x.return;
+        continue;
+      }
+      const s = getDebugSourceExtended(x);
+      if (s?.fileName) {
+        const norm = normalizeDevPath(s.fileName);
+        if (isTsxOrJsxPath(norm)) {
+          return {
+            fileName: s.fileName,
+            lineNumber: typeof s.lineNumber === "number" ? s.lineNumber : undefined,
+          };
+        }
+      }
+      x = x.return;
+    }
+    let o: Fiber | null = f;
+    for (let d = 0; o && d < 80; d++) {
+      if (typeof o.type !== "string") {
+        const s = getDebugSourceExtended(o);
+        if (s?.fileName) {
+          const norm = normalizeDevPath(s.fileName);
+          if (isTsxOrJsxPath(norm)) return s;
+        }
+      }
+      o = (o._debugOwner as Fiber | null) ?? null;
+    }
+    return null;
+  };
+
+  return tryFiber(start);
+}
+
 /** `edit-customer-form.tsx` → `EditCustomerForm` when React names are anonymous wrappers. */
 function guessNameFromPath(filePath: string): string | null {
-  const base = filePath.split("/").pop()?.replace(/\.(tsx?|jsx?|mjs|cjs|js)$/, "") ?? "";
+  const segments = filePath.split("/").filter(Boolean);
+  const fileSeg = segments.pop() ?? "";
+  let base = fileSeg.replace(/\.(tsx?|jsx?|mjs|cjs|js)$/, "");
+  if (base === "index" && segments.length > 0) {
+    const parent = segments[segments.length - 1];
+    if (parent && parent !== "node_modules" && !parent.startsWith("@")) {
+      base = parent;
+    }
+  }
   if (!base || base === "index" || base === "unknown") return null;
   const parts = base.split(/[-_.]/).filter(Boolean);
   if (parts.length === 0) return null;
@@ -368,6 +424,13 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     walkDebugOwnersForSourceExtended(start) ||
     walkReturnForSourceExtended(start) ||
     (best ? walkReturnForSourceExtended(best) : null);
+
+  /** Innermost fiber whose debug path ends in `.tsx`/`.jsx` (walks up from leaf). */
+  const tsxNearest =
+    nearestTsxJsxSourceFromFiber(start) || nearestTsxJsxSourceFromFiber(best);
+  if (tsxNearest?.fileName) {
+    src = tsxNearest;
+  }
 
   let file = "unknown";
   let line: string = "?";
