@@ -129,10 +129,6 @@ function pickRankedFiber(xpaths: string[]): ReturnType<typeof getFiberFromHostIn
   return candidates[0].fiber;
 }
 
-function normPathKey(file: string): string {
-  return file.replace(/\\/g, "/");
-}
-
 function pickCandidateFromFiber(
   fiber: RawPick["fiber"],
   kind: PickCandidate["kind"],
@@ -173,10 +169,20 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
   }
 
   let anchorFiber = pickRankedFiber(xpaths);
+  /** Fiber at the actual click target (composed path[0]) — reliable `return` chain for outermost. */
+  let clickFiber: ReturnType<typeof getFiberFromHostInstance> | null = null;
+  if (xpaths.length > 0) {
+    const n = evalXPath(xpaths[0]);
+    if (n && (n instanceof Element || n instanceof Text)) {
+      clickFiber = getFiberFromHostInstance(n) ?? getFiberFromNode(n);
+    }
+  }
   if (!anchorFiber && xpaths.length > 0) {
     const n = evalXPath(xpaths[0]);
     if (n) anchorFiber = getFiberFromNode(n);
   }
+
+  const walkRoot = clickFiber ?? anchorFiber;
 
   const anchorNode = xpaths.length ? evalXPath(xpaths[0]) : null;
   const baseLayer = anchorNode ? classifyLayer(anchorNode) : "page";
@@ -185,11 +191,8 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
   const keyOfResolved = (r: PickCandidate["resolved"]): string =>
     `${r.file}|${r.line}|${r.name}`;
 
-  const semanticLeafFiber = anchorFiber ? nearestLeafFiberWithFile(anchorFiber) : null;
+  const semanticLeafFiber = walkRoot ? nearestLeafFiberWithFile(walkRoot) : null;
   const semanticKey = semanticLeafFiber ? keyOfResolved(resolvePickFromFiber(semanticLeafFiber)) : null;
-  const leafFileNorm = semanticLeafFiber
-    ? normPathKey(resolvePickFromFiber(semanticLeafFiber).file)
-    : null;
 
   const grouped = new Map<string, RawPick[]>();
   for (const r of raw) {
@@ -231,12 +234,10 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
       continue;
     }
 
-    // Same file as the semantic leaf: outermost meaningful parent (e.g. EditCustomerForm vs FormProvider).
-    // Different file: use path-nearest parent for that file so we don't repeat the same component name twice.
-    const sameFileAsLeaf = leafFileNorm !== null && normPathKey(file) === leafFileNorm;
+    // Walk `return` from the click fiber so outermost-in-file matches DevTools / real tree order.
     const parentFib =
-      sameFileAsLeaf && anchorFiber != null
-        ? resolveOutermostFiberForSourceFile(anchorFiber, file) ?? parent.fiber
+      walkRoot != null
+        ? resolveOutermostFiberForSourceFile(walkRoot, file) ?? parent.fiber
         : parent.fiber;
     push(
       pickCandidateFromFiber(parentFib, "parent", parent.pathIndex, parent.layer, parent.score),

@@ -401,6 +401,8 @@ const OUTERMOST_GENERIC_RUNTIME_NAMES = new Set([
   "Paper",
   "Card",
   "Fragment",
+  /** react-hook-form — prefer the real page/form component */
+  "Controller",
 ]);
 
 /**
