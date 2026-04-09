@@ -17,18 +17,71 @@ function evalXPath(xp: string): Node | null {
   }
 }
 
+type Candidate = {
+  fiber: ReturnType<typeof getFiberFromHostInstance>;
+  score: number;
+  layer: "page" | "dialog" | "form" | "none";
+  pathIndex: number;
+};
+
+function classifyLayer(node: Node): "page" | "dialog" | "form" | "none" {
+  const el = node instanceof Element ? node : node.parentElement;
+  if (!el) return "none";
+
+  if (el.closest("main, [role='main'], article, [data-nextjs-scroll-focus-boundary], #__next")) {
+    return "page";
+  }
+
+  if (
+    el.closest(
+      "[role='dialog'], [aria-modal='true'], dialog, [role='alertdialog'], [data-state='open'][data-radix-collection-item], [data-radix-dialog-content], [data-dialog-content]",
+    )
+  ) {
+    return "dialog";
+  }
+
+  if (el.closest("form, [role='form'], [aria-labelledby*='form' i], [data-form], [data-testid*='form' i]")) {
+    return "form";
+  }
+
+  return "none";
+}
+
+function layerScore(layer: "page" | "dialog" | "form" | "none"): number {
+  // Intent-first ranking: nearest form, else nearest dialog, else nearest page.
+  if (layer === "form") return 300;
+  if (layer === "dialog") return 200;
+  if (layer === "page") return 100;
+  return 0;
+}
+
+function pickRankedFiber(xpaths: string[]): ReturnType<typeof getFiberFromHostInstance> {
+  const candidates: Candidate[] = [];
+
+  for (let i = 0; i < xpaths.length; i++) {
+    const xp = xpaths[i];
+    const node = evalXPath(xp);
+    if (!node || !(node instanceof Element || node instanceof Text)) continue;
+    const fiber = getFiberFromHostInstance(node);
+    if (!fiber) continue;
+
+    const layer = classifyLayer(node);
+    // Smaller i means closer to click target; prefer nearest within each layer.
+    const score = layerScore(layer) - i;
+    candidates.push({ fiber, score, layer, pathIndex: i });
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].fiber;
+}
+
 function handleMessage(ev: MessageEvent): void {
   if (ev.source !== window || ev.data?.type !== MSG_GET) return;
   const { requestId, xpaths } = ev.data as { requestId?: string; xpaths?: string[] };
   if (!requestId || !Array.isArray(xpaths)) return;
 
-  let fiber = null;
-  for (const xp of xpaths) {
-    const node = evalXPath(xp);
-    if (!node || !(node instanceof Element || node instanceof Text)) continue;
-    fiber = getFiberFromHostInstance(node);
-    if (fiber) break;
-  }
+  let fiber = pickRankedFiber(xpaths);
 
   if (!fiber && xpaths.length > 0) {
     const node = evalXPath(xpaths[0]);
