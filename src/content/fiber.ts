@@ -18,7 +18,16 @@ export function normalizeDevPath(file: string): string {
   s = s.replace(/^\(ssr\)\//, "");
   s = s.replace(/^file:\/\/\//, "");
   s = s.replace(/^file:\/\//, "");
-  return s.replace(/\\/g, "/");
+  s = s.replace(/\\/g, "/");
+  // Webpack/Next often append ?cacheKey (e.g. `.../_app.tsx?f9d6`); without this,
+  // `.tsx` is not at end-of-string and we skip the file for tsx matching + guessing.
+  const q = s.indexOf("?");
+  if (q !== -1) s = s.slice(0, q);
+  const h = s.indexOf("#");
+  if (h !== -1) s = s.slice(0, h);
+  // Next.js dev bundles use namespace `webpack://_N_E/...`
+  s = s.replace(/^_N_E\//, "");
+  return s;
 }
 
 /**
