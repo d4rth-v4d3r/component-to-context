@@ -11,11 +11,17 @@ export type PickCandidate = {
   pathIndex: number;
   score: number;
   kind: "leaf" | "parent";
+  /** Serialized in page world where `__reactFiber$` is readable. */
+  propsText?: string | null;
+  stateText?: string | null;
 };
 export type PageWorldPickResult = {
   resolved: PickResolved;
   candidates: PickCandidate[];
   leafName: string | null;
+  /** Props/state for default `resolved` (ranked fiber); use when no dropdown row is chosen. */
+  propsText?: string | null;
+  stateText?: string | null;
 };
 
 let loadPromise: Promise<void> | null = null;
@@ -90,6 +96,8 @@ export async function resolvePickViaPageWorld(ev: MouseEvent): Promise<PageWorld
         resolved: e.data.resolved as PickResolved,
         candidates: Array.isArray(e.data.candidates) ? (e.data.candidates as PickCandidate[]) : [],
         leafName: typeof e.data.leafName === "string" ? e.data.leafName : null,
+        propsText: e.data.propsText as string | null | undefined,
+        stateText: e.data.stateText as string | null | undefined,
       });
     };
 

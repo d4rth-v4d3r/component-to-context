@@ -8,6 +8,7 @@ import {
   getFiberFromHostInstance,
   nearestLeafNamedWithFile,
   resolvePickFromFiber,
+  snapshotPropsStateForPick,
 } from "./fiber";
 
 const MSG_GET = "__rcp__get_fiber";
@@ -34,6 +35,9 @@ type PickCandidate = {
   layer: Candidate["layer"];
   pathIndex: number;
   score: number;
+  kind: "leaf" | "parent";
+  propsText: string | null;
+  stateText: string | null;
 };
 
 function isLocalProjectFile(file: string): boolean {
@@ -137,7 +141,8 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     const key = `${resolved.file}|${resolved.line}|${resolved.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ resolved, layer, pathIndex: i, score, kind: "leaf" });
+    const { propsText, stateText } = snapshotPropsStateForPick(fiber);
+    out.push({ resolved, layer, pathIndex: i, score, kind: "leaf", propsText, stateText });
   }
 
   // Keep only the nearest leaf per file.
@@ -180,7 +185,11 @@ function handleMessage(ev: MessageEvent): void {
 
   const resolved = resolvePickFromFiber(fiber);
   const leafName = nearestLeafNamedWithFile(fiber);
-  window.postMessage({ type: MSG_RESULT, requestId, resolved, candidates, leafName }, "*");
+  const { propsText, stateText } = snapshotPropsStateForPick(fiber);
+  window.postMessage(
+    { type: MSG_RESULT, requestId, resolved, candidates, leafName, propsText, stateText },
+    "*",
+  );
 }
 
 if (!(document.documentElement as HTMLElement).dataset.rcpPageWorld) {

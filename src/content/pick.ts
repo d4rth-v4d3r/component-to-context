@@ -7,6 +7,7 @@ import {
   nearestLeafNamedWithFile,
   resolvePickFromFiber,
   serializePropsForContext,
+  snapshotPropsStateForPick,
 } from "./fiber";
 import {
   resolvePickViaPageWorld,
@@ -274,17 +275,12 @@ function buildPickItem(
   resolved: PickResolved,
   componentName: string,
   selectionKind: "leaf" | "parent",
+  /** When set (page-world path), fibers are readable there but not in the isolated content script. */
+  pagePropsState?: { propsText: string | null; stateText: string | null },
 ): PickItem {
   const file = resolved.file === "unknown" ? "unknown" : resolved.file;
-  const best = findBestFiber(fiber);
-  const propsText = serializePropsForContext(getMemoizedProps(best));
-  const stateRaw = best?.memoizedState ?? null;
-  const stateText =
-    stateRaw == null
-      ? null
-      : typeof stateRaw === "object"
-        ? serializePropsForContext(stateRaw)
-        : String(stateRaw);
+  const { propsText, stateText } =
+    pagePropsState !== undefined ? pagePropsState : snapshotPropsStateForPick(fiber);
   return {
     id: crypto.randomUUID(),
     file,
@@ -386,6 +382,7 @@ function tryPick(ev: MouseEvent, source: string): void {
     let resolved: PickResolved = resolvePickFromFiber(fiber);
     let leafNameForCopy: string | null = nearestLeafNamedWithFile(fiber);
     let selectionKind: "leaf" | "parent" = "leaf";
+    let pagePropsState: { propsText: string | null; stateText: string | null } | undefined;
 
     const needPageWorld =
       !fiber || (resolved.file === "unknown" && resolved.name === "Anonymous");
@@ -414,6 +411,15 @@ function tryPick(ev: MouseEvent, source: string): void {
             selectionKind = matched?.kind ?? "leaf";
           }
           leafNameForCopy = fromPage.leafName ?? leafNameForCopy;
+          pagePropsState = chosen
+            ? {
+                propsText: chosen.propsText ?? null,
+                stateText: chosen.stateText ?? null,
+              }
+            : {
+                propsText: fromPage.propsText ?? null,
+                stateText: fromPage.stateText ?? null,
+              };
           if (isPickerDebugEnabled()) {
             console.info(LOG_PREFIX, "page_world_resolve", {
               resolved,
@@ -435,7 +441,7 @@ function tryPick(ev: MouseEvent, source: string): void {
     }
 
     const copyName = leafNameForCopy || resolved.name;
-    const item = buildPickItem(clickedText, fiber, resolved, copyName, selectionKind);
+    const item = buildPickItem(clickedText, fiber, resolved, copyName, selectionKind, pagePropsState);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK_ITEM", item })

@@ -858,3 +858,20 @@ export function getMemoizedProps(fiber: Fiber | null): unknown {
   const best = findBestFiber(fiber);
   return best?.memoizedProps ?? null;
 }
+
+/** Props/state snapshot for side-panel copy (same fiber walk as `buildPickItem` in pick.ts). */
+export function snapshotPropsStateForPick(fiber: Fiber | null): {
+  propsText: string | null;
+  stateText: string | null;
+} {
+  const best = findBestFiber(fiber);
+  const propsText = serializePropsForContext(getMemoizedProps(best));
+  const stateRaw = best?.memoizedState ?? null;
+  const stateText =
+    stateRaw == null
+      ? null
+      : typeof stateRaw === "object"
+        ? serializePropsForContext(stateRaw)
+        : String(stateRaw);
+  return { propsText, stateText };
+}
