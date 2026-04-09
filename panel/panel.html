@@ -13,6 +13,15 @@
         appends below.
       </p>
     </header>
+    <section class="lead-wrap" aria-label="Clipboard intro">
+      <label for="clipboard-lead" class="lead-label">Review intro (first line when you send)</label>
+      <div class="lead-row">
+        <textarea id="clipboard-lead" class="lead-textarea" rows="2" spellcheck="true"></textarea>
+        <button type="button" id="clipboard-lead-reset" class="btn-reset" title="Reset to default" aria-label="Reset intro to default">
+          ↺
+        </button>
+      </div>
+    </section>
     <nav class="tabs" role="tablist" aria-label="Items by status">
       <button type="button" role="tab" id="tab-pending" class="tab" aria-selected="true" aria-controls="panel-pending">
         Pending <span class="tab-count" id="count-pending">0</span>

@@ -1,6 +1,17 @@
 import "./panel.css";
 
 const STORAGE_KEY = "contextItems";
+const CLIPBOARD_LEAD_KEY = "rcpClipboardLead";
+
+const DEFAULT_CLIPBOARD_LEAD =
+  "Please review the following items and fix them if necessary or ask for clarification. If any change is needed make sure to ALWAYS update related tests or add new ones";
+
+const clipboardLeadTextarea = document.getElementById("clipboard-lead") as HTMLTextAreaElement;
+const clipboardLeadResetBtn = document.getElementById("clipboard-lead-reset") as HTMLButtonElement;
+
+let clipboardLead = DEFAULT_CLIPBOARD_LEAD;
+let clipboardLeadSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
 const panelPending = document.getElementById("panel-pending") as HTMLDivElement;
 const panelDone = document.getElementById("panel-done") as HTMLDivElement;
 const tabPending = document.getElementById("tab-pending") as HTMLButtonElement;
@@ -80,7 +91,7 @@ function toClipboardBlock(item: PickItem): string {
 }
 
 function buildClipboardText(all: PickItem[]): string {
-  const legend = "Please review the following items and fix them if necessary or ask for clarification";
+  const legend = clipboardLead.trim() || DEFAULT_CLIPBOARD_LEAD;
   const blocks = all.map(toClipboardBlock);
   return [legend, ...blocks].join("\n\n\n");
 }
@@ -323,6 +334,13 @@ listsWrap.addEventListener(
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
+  if (changes[CLIPBOARD_LEAD_KEY]) {
+    const v = changes[CLIPBOARD_LEAD_KEY].newValue;
+    if (typeof v === "string") {
+      clipboardLead = v;
+      clipboardLeadTextarea.value = v;
+    }
+  }
   if (!changes[STORAGE_KEY]) return;
   const newVal = ((changes[STORAGE_KEY].newValue as PickItem[] | undefined) ?? []).filter(Boolean);
   const oldVal = ((changes[STORAGE_KEY].oldValue as PickItem[] | undefined) ?? []).filter(Boolean);
@@ -411,4 +429,41 @@ undoBtn.addEventListener("click", async () => {
   undoBtn.classList.add("hidden");
 });
 
+async function loadClipboardLead(): Promise<void> {
+  const data = await chrome.storage.local.get(CLIPBOARD_LEAD_KEY);
+  const raw = data[CLIPBOARD_LEAD_KEY];
+  clipboardLead = typeof raw === "string" && raw.trim() ? raw : DEFAULT_CLIPBOARD_LEAD;
+  clipboardLeadTextarea.value = clipboardLead;
+}
+
+function scheduleSaveClipboardLead(): void {
+  if (clipboardLeadSaveTimer != null) clearTimeout(clipboardLeadSaveTimer);
+  clipboardLeadSaveTimer = setTimeout(() => {
+    clipboardLeadSaveTimer = null;
+    clipboardLead = clipboardLeadTextarea.value;
+    void chrome.storage.local.set({ [CLIPBOARD_LEAD_KEY]: clipboardLead });
+  }, 350);
+}
+
+clipboardLeadTextarea.addEventListener("input", () => {
+  clipboardLead = clipboardLeadTextarea.value;
+  scheduleSaveClipboardLead();
+});
+
+clipboardLeadTextarea.addEventListener("blur", () => {
+  if (clipboardLeadSaveTimer != null) {
+    clearTimeout(clipboardLeadSaveTimer);
+    clipboardLeadSaveTimer = null;
+  }
+  clipboardLead = clipboardLeadTextarea.value;
+  void chrome.storage.local.set({ [CLIPBOARD_LEAD_KEY]: clipboardLead });
+});
+
+clipboardLeadResetBtn.addEventListener("click", () => {
+  clipboardLead = DEFAULT_CLIPBOARD_LEAD;
+  clipboardLeadTextarea.value = DEFAULT_CLIPBOARD_LEAD;
+  void chrome.storage.local.set({ [CLIPBOARD_LEAD_KEY]: DEFAULT_CLIPBOARD_LEAD });
+});
+
+void loadClipboardLead();
 void refreshFromStorage();

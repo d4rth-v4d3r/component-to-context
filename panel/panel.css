@@ -50,6 +50,67 @@ body {
   font-size: 12px;
 }
 
+.lead-wrap {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lead-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.lead-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.lead-textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  margin: 0;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 92%, var(--fg));
+  color: var(--fg);
+  resize: vertical;
+  field-sizing: content;
+}
+
+.lead-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.btn-reset {
+  flex-shrink: 0;
+  margin-top: 2px;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.btn-reset:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
 .tabs {
   display: flex;
   gap: 0;
