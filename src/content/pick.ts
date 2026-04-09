@@ -7,11 +7,16 @@ import {
   resolvePickFromFiber,
   serializePropsForContext,
 } from "./fiber";
+import { resolvePickViaPageWorld, type PickResolved } from "./page-world-bridge";
 
 const LOG_PREFIX = "[React Context Picker]";
 
-function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromComposedPath>): string {
-  const resolved = resolvePickFromFiber(fiber);
+function formatBlock(
+  route: string,
+  fiber: ReturnType<typeof getFiberFromComposedPath>,
+  resolvedOverride?: PickResolved,
+): string {
+  const resolved = resolvedOverride ?? resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
   const primary = resolved.omitLine
     ? `@${filePart} ${resolved.name} (${route}) - `
@@ -98,27 +103,50 @@ function tryPick(ev: MouseEvent, source: string): void {
   ev.stopPropagation();
   ev.stopImmediatePropagation();
 
-  const fiber = getFiberFromComposedPath(ev);
-  if (!fiber && isPickerDebugEnabled()) {
-    logFiberLookupMiss(ev);
-  }
   const route =
     typeof window !== "undefined"
       ? `${window.location.pathname}${window.location.search}`
       : "";
 
-  const block = formatBlock(route, fiber);
+  void (async () => {
+    let fiber = getFiberFromComposedPath(ev);
+    let resolved: PickResolved = resolvePickFromFiber(fiber);
 
-  void chrome.runtime
-    .sendMessage({ type: "APPEND_PICK", block })
-    .then(() => {
-      console.info(LOG_PREFIX, "pick sent (open side panel → textarea or Copy all)", {
-        preview: block.slice(0, 120),
+    const needPageWorld =
+      !fiber || (resolved.file === "unknown" && resolved.name === "Anonymous");
+
+    if (needPageWorld) {
+      if (!fiber && isPickerDebugEnabled()) {
+        logFiberLookupMiss(ev);
+      }
+      try {
+        const fromPage = await resolvePickViaPageWorld(ev);
+        if (fromPage && (fromPage.file !== "unknown" || fromPage.name !== "Anonymous")) {
+          resolved = fromPage;
+          if (isPickerDebugEnabled()) {
+            console.info(LOG_PREFIX, "page_world_resolve", { resolved });
+          }
+        }
+      } catch (e) {
+        if (isPickerDebugEnabled()) {
+          console.warn(LOG_PREFIX, "page_world_resolve failed", e);
+        }
+      }
+    }
+
+    const block = formatBlock(route, fiber, resolved);
+
+    void chrome.runtime
+      .sendMessage({ type: "APPEND_PICK", block })
+      .then(() => {
+        console.info(LOG_PREFIX, "pick sent (open side panel → textarea or Copy all)", {
+          preview: block.slice(0, 120),
+        });
+      })
+      .catch((err: unknown) => {
+        console.error(LOG_PREFIX, "sendMessage failed — reload extension & tab", err);
       });
-    })
-    .catch((err: unknown) => {
-      console.error(LOG_PREFIX, "sendMessage failed — reload extension & tab", err);
-    });
+  })();
 }
 
 function onMouseDown(ev: MouseEvent): void {

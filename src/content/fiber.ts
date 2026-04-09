@@ -179,7 +179,7 @@ export function logFiberLookupMiss(ev: MouseEvent): void {
     pathHead: summary,
     reactDevtoolsRenderers: getReactDevtoolsRendererCount(),
     hint:
-      "Clicks often target #text — fixed in this build. If still miss: prod React, iframe, or non-React DOM.",
+      "Isolated content script cannot read __reactFiber$ on DOM (Chrome); page-world bridge runs next. If still miss: closed shadow DOM, iframe without all_frames, or non-React DOM.",
   });
 }
 

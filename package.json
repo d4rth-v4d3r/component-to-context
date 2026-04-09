@@ -4,11 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node scripts/build-page-world.mjs",
     "watch": "vite build --watch"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
+    "esbuild": "^0.25.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.3"
   }

@@ -27,6 +27,12 @@ const manifest = {
   minimum_chrome_version: "114",
   permissions: ["sidePanel", "storage", "clipboardWrite"],
   host_permissions: [...matches],
+  web_accessible_resources: [
+    {
+      resources: ["content/page-world.js"],
+      matches: [...matches],
+    },
+  ],
   background: {
     service_worker: "background.js",
     type: "module",
