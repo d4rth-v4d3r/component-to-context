@@ -19,7 +19,9 @@ function isDebugEnabled(): boolean {
 function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromComposedPath>): string {
   const resolved = resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
-  const primary = `@${filePart}:${resolved.line} ${resolved.name} (${route}) - `;
+  const primary = resolved.omitLine
+    ? `@${filePart} ${resolved.name} (${route}) - `
+    : `@${filePart}:${resolved.line} ${resolved.name} (${route}) - `;
 
   const best = findBestFiber(fiber);
   const props = getMemoizedProps(best);

@@ -246,17 +246,51 @@ export function findBestFiber(start: Fiber | null): Fiber | null {
   return bestNamed || bestWithSource || start;
 }
 
+/**
+ * Nearest ancestor (walking `return`, then `_debugOwner`) that has both a real name and
+ * `_debugSource.fileName` — matches “nearest non-anonymous parent” in DevTools.
+ */
+function nearestNonAnonymousWithFile(start: Fiber | null): { name: string; file: string } | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 120; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const name = getNameFromFiber(f);
+    const src = getDebugSource(f);
+    if (name && name !== "Anonymous" && src?.fileName) {
+      return { name, file: normalizeDevPath(src.fileName) };
+    }
+    f = f.return;
+  }
+  let o: Fiber | null = start;
+  for (let d = 0; o && d < 50; d++) {
+    if (typeof o.type !== "string") {
+      const name = getNameFromFiber(o);
+      const src = getDebugSource(o);
+      if (name && name !== "Anonymous" && src?.fileName) {
+        return { name, file: normalizeDevPath(src.fileName) };
+      }
+    }
+    o = (o._debugOwner as Fiber | null) ?? null;
+  }
+  return null;
+}
+
 export function resolvePickFromFiber(fiber: Fiber | null): {
   file: string;
   line: string;
   name: string;
+  /** When true, format as `@file Name (route)` — no `:line` (parent fallback for anonymous leaves). */
+  omitLine: boolean;
 } {
   const best = findBestFiber(fiber);
   if (!best) {
-    return { file: "unknown", line: "?", name: "Anonymous" };
+    return { file: "unknown", line: "?", name: "Anonymous", omitLine: true };
   }
 
-  const name = resolveDisplayName(best);
+  let name = resolveDisplayName(best);
 
   const walkForSource = (startFiber: Fiber | null): ReturnType<typeof getDebugSource> => {
     let f: Fiber | null = startFiber;
@@ -272,6 +306,7 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
 
   let file = "unknown";
   let line: string = "?";
+  let omitLine = false;
 
   const src =
     getDebugSource(best) ||
@@ -295,7 +330,21 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     }
   }
 
-  return { file, line, name };
+  const parentFallback = nearestNonAnonymousWithFile(best);
+
+  if (name === "Anonymous" && parentFallback) {
+    name = parentFallback.name;
+    file = parentFallback.file;
+    omitLine = true;
+    line = "?";
+  } else if (file === "unknown" && parentFallback) {
+    file = parentFallback.file;
+    name = parentFallback.name;
+    omitLine = true;
+    line = "?";
+  }
+
+  return { file, line, name, omitLine };
 }
 
 const MAX_JSON_LEN = 12_000;
