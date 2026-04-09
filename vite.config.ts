@@ -1,11 +1,26 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+import { execSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
 
+/** `vite build --watch` clears `dist/` and never ran `write-manifest.mjs`; emit manifest after every build. */
+function writeChromeManifestPlugin(): Plugin {
+  return {
+    name: "write-chrome-manifest",
+    closeBundle() {
+      execSync("node scripts/write-manifest.mjs", {
+        cwd: root,
+        stdio: "inherit",
+      });
+    },
+  };
+}
+
 export default defineConfig({
   root,
+  plugins: [writeChromeManifestPlugin()],
   /** Relative asset URLs for `chrome-extension://` side panel pages. */
   base: "./",
   publicDir: false,
