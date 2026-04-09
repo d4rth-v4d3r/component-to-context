@@ -1,6 +1,6 @@
 # React Context Picker (Chrome extension)
 
-**Google Chrome only.** Dev-only helper: hold **Shift+Alt** (Windows/Linux) or **Shift+Option** (macOS), then **left-click** a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
+**Google Chrome only.** Dev-only helper: **Shift+Option** (mac) / **Shift+Alt** (Win), or **⌘+Shift** (mac) / **Ctrl+Shift** (Win), then **left-click** a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
 
 ## Prerequisites
 
@@ -39,7 +39,7 @@ Then reload the extension in Chrome after each rebuild (see below).
 1. Start your **local** Next.js or React app (e.g. `npm run dev`) so it is served on an allowed URL (see [Allowed URLs](#allowed-urls)).
 2. Open that app in Chrome (e.g. `http://localhost:3000` or `http://something.web-ui.localhost:1355/...`).
 3. Click the extension’s **toolbar icon** to open the **side panel** (the extension is configured to open the side panel when you click the icon).
-4. Hold **Shift+Alt** (Windows/Linux) or **Shift+Option** (macOS) and **left-click** a visible UI element that belongs to your React tree. Each click **appends** a block to the textarea.
+4. Use a pick chord (**Shift+Option** / **Shift+Alt**, or **⌘+Shift** / **Ctrl+Shift**) and **left-click** a visible UI element. Each pick **appends** a block to the side panel textarea (nothing is copied to the clipboard until you click **Copy all**).
 5. Click **Copy all** at the bottom and paste into your agent. Use **Clear** to reset the buffer.
 
 **What to expect**
@@ -64,9 +64,11 @@ If you want to restrict origins later, replace those entries in [`scripts/write-
 ## Troubleshooting
 
 - **Nothing happens when using the chord**  
-  - Confirm the page URL matches an [allowed pattern](#allowed-urls) (scheme, host, **port**). Multi-segment hosts like `x.y.localhost` require the rebuilt manifest (see [Allowed URLs](#allowed-urls)).  
-  - **Reload** the extension on `chrome://extensions` and **refresh** the tab.  
-  - Use **Shift+Option** (mac) or **Shift+Alt** (Win/Linux), then click; the handler uses `mousedown` on `window` capture and stops propagation so app click handlers should not run.
+  - Open DevTools (**⌥⌘J** / **F12**) → **Console**. You should see **`[React Context Picker] content script loaded`** when the page loads. If not, the content script is not injected — **reload** the extension and the tab.  
+  - On success, a line **`pick sent (open side panel → textarea or Copy all)`** appears. If **`sendMessage failed`**, reload the extension and tab.  
+  - Verbose modifier logging: run `localStorage.setItem('REACT_CONTEXT_PICKER_DEBUG','1')` in the console, refresh, then try the chord again (logs every `mousedown`/`click` with modifier flags).  
+  - Try **⌘+Shift+click** (Mac) or **Ctrl+Shift+click** (Win) if **Shift+Option** does not register.  
+  - Picks go to the **side panel** only — open it with the toolbar icon; use **Copy all** for the clipboard.
 
 - **No file/line or lots of `Anonymous`**  
   - Use a **development** build (`next dev`, Vite dev, etc.), not production.  
