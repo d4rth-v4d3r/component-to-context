@@ -9,6 +9,7 @@ type PickItem = {
   url: string;
   prompt: string;
   selectionKind: "leaf" | "parent";
+  status?: "pending" | "done";
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -82,7 +83,8 @@ chrome.runtime.onMessage.addListener(
 async function appendItem(item: PickItem): Promise<void> {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   const prev = (data[STORAGE_KEY] as PickItem[] | undefined) ?? [];
-  const next = [...prev, item];
+  const normalized = { ...item, status: item.status ?? "pending" };
+  const next = [normalized, ...prev];
   await chrome.storage.local.set({ [STORAGE_KEY]: next });
 }
 

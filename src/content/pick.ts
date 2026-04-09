@@ -16,6 +16,7 @@ import {
 
 const LOG_PREFIX = "[React Context Picker]";
 const PROMPT_PLACEHOLDER = "";
+const PICKER_ROOT_ID = "rcp-candidate-picker";
 
 type PickItem = {
   id: string;
@@ -26,6 +27,7 @@ type PickItem = {
   url: string;
   prompt: string;
   selectionKind: "leaf" | "parent";
+  status: "pending" | "done";
 };
 
 function pickUrlPath(): string {
@@ -135,7 +137,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickCandidate | n
   return new Promise((resolve) => {
     const shortPathMap = buildShortDisplayPathMap(candidates);
     const root = document.createElement("div");
-    root.id = "rcp-candidate-picker";
+    root.id = PICKER_ROOT_ID;
     root.style.cssText =
       "position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:2147483647;display:flex;align-items:center;justify-content:center;";
 
@@ -226,27 +228,22 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickCandidate | n
   });
 }
 
-/** Prefer clicked node text; if empty, walk up to nearest ancestor with readable text. */
-function pickComponentText(fiber: ReturnType<typeof getFiberFromComposedPath>): string {
-  const best = findBestFiber(fiber);
-  const hostNode = (best?.stateNode as Node | null) ?? null;
-  let el: Element | null = null;
-  if (hostNode instanceof Element) el = hostNode;
-  else if (hostNode instanceof Text) el = hostNode.parentElement;
-  if (!el) return "";
-
-  let cur: Element | null = el;
-  for (let i = 0; cur && i < 5; i++) {
-    const raw = cur.textContent ?? "";
+/** Prefer text from clicked/composed-path hosts; fallback is empty string. */
+function pickComponentTextFromEvent(ev: MouseEvent): string {
+  for (const n of ev.composedPath()) {
+    let raw = "";
+    if (n instanceof Text) raw = n.textContent ?? "";
+    else if (n instanceof Element) raw = n.textContent ?? "";
+    else continue;
     const one = escapedOneLine(raw);
     if (one) return one.length > 140 ? `${one.slice(0, 140)}…` : one;
-    cur = cur.parentElement;
   }
   return "";
 }
 
 function formatBlock(
   fiber: ReturnType<typeof getFiberFromComposedPath>,
+  textContent: string,
   resolvedOverride?: PickResolved,
   nameOverride?: string | null,
 ): string {
@@ -254,7 +251,7 @@ function formatBlock(
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
   const linePart =
     resolved.line !== "?" && Number.isFinite(Number(resolved.line)) ? `:${resolved.line}` : "";
-  const componentText = pickComponentText(fiber);
+  const componentText = textContent;
   const copyName = nameOverride || nearestLeafNamedWithFile(fiber) || resolved.name;
   const primary = `@${filePart}${linePart} ${copyName}("${componentText}") - `;
 
@@ -268,7 +265,7 @@ function formatBlock(
 }
 
 function buildPickItem(
-  fiber: ReturnType<typeof getFiberFromComposedPath>,
+  textContent: string,
   resolved: PickResolved,
   componentName: string,
   selectionKind: "leaf" | "parent",
@@ -279,10 +276,11 @@ function buildPickItem(
     file,
     line: resolved.line,
     componentName,
-    textContent: pickComponentText(fiber),
+    textContent,
     url: pickUrlPath(),
     prompt: PROMPT_PLACEHOLDER,
     selectionKind,
+    status: "pending",
   };
 }
 
@@ -337,6 +335,11 @@ function wantsPickChord(ev: MouseEvent): boolean {
 let lastPickAt = 0;
 
 function tryPick(ev: MouseEvent, source: string): void {
+  const targetEl = ev.target instanceof Element ? ev.target : null;
+  if (targetEl?.closest(`#${PICKER_ROOT_ID}`)) {
+    return;
+  }
+
   if (isPickerDebugEnabled()) {
     console.info(LOG_PREFIX, source, {
       shiftKey: ev.shiftKey,
@@ -360,6 +363,7 @@ function tryPick(ev: MouseEvent, source: string): void {
   ev.stopImmediatePropagation();
 
   void (async () => {
+    const clickedText = pickComponentTextFromEvent(ev);
     let fiber = getFiberFromComposedPath(ev);
     let resolved: PickResolved = resolvePickFromFiber(fiber);
     let leafNameForCopy: string | null = nearestLeafNamedWithFile(fiber);
@@ -380,7 +384,17 @@ function tryPick(ev: MouseEvent, source: string): void {
         ) {
           const chosen = await chooseCandidate(fromPage.candidates);
           resolved = chosen?.resolved ?? fromPage.resolved;
-          selectionKind = chosen?.kind ?? "leaf";
+          if (chosen?.kind) {
+            selectionKind = chosen.kind;
+          } else {
+            const matched = fromPage.candidates.find(
+              (c) =>
+                c.resolved.file === resolved.file &&
+                c.resolved.line === resolved.line &&
+                c.resolved.name === resolved.name,
+            );
+            selectionKind = matched?.kind ?? "leaf";
+          }
           leafNameForCopy = fromPage.leafName ?? leafNameForCopy;
           if (isPickerDebugEnabled()) {
             console.info(LOG_PREFIX, "page_world_resolve", {
@@ -403,7 +417,7 @@ function tryPick(ev: MouseEvent, source: string): void {
     }
 
     const copyName = leafNameForCopy || resolved.name;
-    const item = buildPickItem(fiber, resolved, copyName, selectionKind);
+    const item = buildPickItem(clickedText, resolved, copyName, selectionKind);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK_ITEM", item })
