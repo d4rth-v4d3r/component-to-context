@@ -8,26 +8,25 @@ chrome.runtime.onStartup.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
 
-type PickPayload = {
-  block: string;
-};
-
 chrome.runtime.onMessage.addListener(
   (message: { type?: string; block?: string }, _sender, sendResponse) => {
     if (message?.type === "APPEND_PICK" && typeof message.block === "string") {
-      void appendBlock(message.block).then(() => sendResponse({ ok: true }));
+      void appendBlock(message.block)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e: unknown) => {
+          console.error("[React Context Picker] appendBlock failed", e);
+          sendResponse({ ok: false, error: String(e) });
+        });
       return true;
     }
     if (message?.type === "GET_BUFFER") {
-      void chrome.storage.session.get(STORAGE_KEY).then((data) => {
+      void chrome.storage.local.get(STORAGE_KEY).then((data) => {
         sendResponse({ text: String(data[STORAGE_KEY] ?? "") });
       });
       return true;
     }
     if (message?.type === "CLEAR_BUFFER") {
-      void chrome.storage.session.set({ [STORAGE_KEY]: "" }).then(() =>
-        sendResponse({ ok: true }),
-      );
+      void chrome.storage.local.set({ [STORAGE_KEY]: "" }).then(() => sendResponse({ ok: true }));
       return true;
     }
     return false;
@@ -35,8 +34,8 @@ chrome.runtime.onMessage.addListener(
 );
 
 async function appendBlock(block: string): Promise<void> {
-  const data = await chrome.storage.session.get(STORAGE_KEY);
+  const data = await chrome.storage.local.get(STORAGE_KEY);
   const prev = String(data[STORAGE_KEY] ?? "");
   const next = prev ? `${prev}\n\n${block}` : block;
-  await chrome.storage.session.set({ [STORAGE_KEY]: next });
+  await chrome.storage.local.set({ [STORAGE_KEY]: next });
 }

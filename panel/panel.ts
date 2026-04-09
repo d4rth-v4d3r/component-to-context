@@ -7,15 +7,19 @@ const copyBtn = document.getElementById("copy") as HTMLButtonElement;
 const clearBtn = document.getElementById("clear") as HTMLButtonElement;
 
 async function refreshFromStorage(): Promise<void> {
-  const data = await chrome.storage.session.get(STORAGE_KEY);
+  const data = await chrome.storage.local.get(STORAGE_KEY);
   buf.value = String(data[STORAGE_KEY] ?? "");
 }
 
-chrome.storage.session.onChanged.addListener((changes, area) => {
-  if (area !== "session") return;
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
   if (changes[STORAGE_KEY]) {
     buf.value = String(changes[STORAGE_KEY].newValue ?? "");
   }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void refreshFromStorage();
 });
 
 copyBtn.addEventListener("click", async () => {
@@ -34,7 +38,7 @@ copyBtn.addEventListener("click", async () => {
 });
 
 clearBtn.addEventListener("click", async () => {
-  await chrome.storage.session.set({ [STORAGE_KEY]: "" });
+  await chrome.storage.local.set({ [STORAGE_KEY]: "" });
   buf.value = "";
 });
 

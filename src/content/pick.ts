@@ -1,5 +1,5 @@
 import {
-  getFiberFromNode,
+  getFiberFromComposedPath,
   findBestFiber,
   getMemoizedProps,
   resolvePickFromFiber,
@@ -16,7 +16,7 @@ function isDebugEnabled(): boolean {
   }
 }
 
-function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromNode>): string {
+function formatBlock(route: string, fiber: ReturnType<typeof getFiberFromComposedPath>): string {
   const resolved = resolvePickFromFiber(fiber);
   const filePart = resolved.file === "unknown" ? "unknown" : resolved.file;
   const primary = `@${filePart}:${resolved.line} ${resolved.name} (${route}) - `;
@@ -94,18 +94,15 @@ function tryPick(ev: MouseEvent, source: string): void {
   if (!wantsPickChord(ev)) return;
   if (ev.button !== 0) return;
 
+  const now = performance.now();
+  if (now - lastPickAt < 550) return;
+  lastPickAt = now;
+
   ev.preventDefault();
   ev.stopPropagation();
   ev.stopImmediatePropagation();
 
-  const now = performance.now();
-  if (now - lastPickAt < 350) return;
-  lastPickAt = now;
-
-  const target = ev.target;
-  if (!(target instanceof Node)) return;
-
-  const fiber = getFiberFromNode(target);
+  const fiber = getFiberFromComposedPath(ev);
   const route =
     typeof window !== "undefined"
       ? `${window.location.pathname}${window.location.search}`
@@ -130,12 +127,7 @@ function onMouseDown(ev: MouseEvent): void {
 }
 
 /** Some trackpads / macOS builds deliver the gesture more reliably on `click`. */
-function onClick(ev: MouseEvent): void {
-  tryPick(ev, "click");
-}
-
 window.addEventListener("mousedown", onMouseDown, { capture: true, passive: false });
-window.addEventListener("click", onClick, { capture: true, passive: false });
 
 console.info(
   LOG_PREFIX,

@@ -3,6 +3,12 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Fiber = any;
 
+function looksLikeFiber(node: unknown): node is Fiber {
+  if (node == null || typeof node !== "object") return false;
+  const f = node as { tag?: unknown; return?: unknown; child?: unknown };
+  return typeof f.tag === "number";
+}
+
 export function normalizeDevPath(file: string): string {
   let s = file.trim();
   s = s.replace(/^webpack-internal:\/\/(\/\/)?/i, "");
@@ -15,31 +21,105 @@ export function normalizeDevPath(file: string): string {
   return s.replace(/\\/g, "/");
 }
 
-function getReactFiberKey(el: Element): string | undefined {
-  return Object.keys(el).find(
-    (k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"),
-  );
+/**
+ * React stores `__reactFiber$…` on DOM nodes. Those keys are often **non-enumerable**,
+ * so `Object.keys` misses them — use `Reflect.ownKeys`.
+ * React 19 may expose `element._reactInternals` (same fiber reference).
+ */
+function getFiberFromDevToolsRenderers(el: Element): Fiber | null {
+  try {
+    const hook = (
+      window as unknown as {
+        __REACT_DEVTOOLS_GLOBAL_HOOK__?: {
+          renderers?: Map<
+            number,
+            { findFiberByHostInstance?: (n: Element | Text) => unknown }
+          >;
+        };
+      }
+    ).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    const renderers = hook?.renderers;
+    if (!renderers?.size) return null;
+    for (const [, renderer] of renderers) {
+      const fn = renderer?.findFiberByHostInstance;
+      if (typeof fn === "function") {
+        const f = fn(el);
+        if (looksLikeFiber(f)) return f as Fiber;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
 }
 
+function getFiberFromElement(el: Element): Fiber | null {
+  const anyEl = el as Record<string | symbol, unknown>;
+
+  if (anyEl._reactInternals != null) {
+    const ri = anyEl._reactInternals;
+    if (looksLikeFiber(ri)) return ri as Fiber;
+    const root = ri as { current?: unknown };
+    if (looksLikeFiber(root.current)) return root.current as Fiber;
+  }
+
+  for (const key of Reflect.ownKeys(el)) {
+    if (typeof key === "string") {
+      if (key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")) {
+        const f = anyEl[key];
+        if (looksLikeFiber(f)) return f as Fiber;
+      }
+    } else {
+      const v = anyEl[key as symbol];
+      if (looksLikeFiber(v)) return v as Fiber;
+    }
+  }
+
+  return getFiberFromDevToolsRenderers(el);
+}
+
+/** Walk DOM ancestors and try shadow/composed paths. */
 export function getFiberFromNode(start: Node | null): Fiber | null {
   let el: Element | null =
     start instanceof Element ? start : start?.parentElement ?? null;
   let hops = 0;
   while (el && hops < 80) {
-    const key = getReactFiberKey(el);
-    if (key) return (el as unknown as Record<string, Fiber>)[key] ?? null;
+    const fiber = getFiberFromElement(el);
+    if (fiber) return fiber;
     el = el.parentElement;
     hops++;
   }
   return null;
 }
 
-function getDisplayNameForType(type: unknown): string | null {
+/** Prefer the event path (shadow DOM, portals) over `target` alone. */
+export function getFiberFromComposedPath(ev: Event): Fiber | null {
+  const path = ev.composedPath();
+  for (const n of path) {
+    const el =
+      n instanceof Element ? n : n instanceof Text ? (n.parentElement as Element | null) : null;
+    if (el) {
+      const fiber = getFiberFromElement(el);
+      if (fiber) return fiber;
+    }
+  }
+  return getFiberFromNode(ev.target instanceof Node ? ev.target : null);
+}
+
+const REACT_MEMO_TYPE = Symbol.for("react.memo");
+const REACT_FORWARD_REF_TYPE = Symbol.for("react.forward_ref");
+const REACT_LAZY_TYPE = Symbol.for("react.lazy");
+
+function getDisplayNameForType(type: unknown, depth = 0): string | null {
+  if (depth > 12) return null;
   if (type == null) return null;
   if (typeof type === "string") return null;
   if (typeof type === "function") {
     const fn = type as { displayName?: string; name?: string };
-    return fn.displayName || fn.name || null;
+    const n = fn.displayName || fn.name || null;
+    if (n && n !== "Anonymous") return n;
+    if (n) return n;
+    return null;
   }
   if (typeof type === "object") {
     const o = type as {
@@ -47,12 +127,32 @@ function getDisplayNameForType(type: unknown): string | null {
       render?: unknown;
       type?: unknown;
       displayName?: string;
+      _payload?: { _result?: unknown };
     };
+    if (o.$$typeof === REACT_MEMO_TYPE && o.type != null) {
+      return getDisplayNameForType(o.type, depth + 1);
+    }
+    if (o.$$typeof === REACT_FORWARD_REF_TYPE) {
+      if (typeof o.render === "function") {
+        const r = o.render as { displayName?: string; name?: string };
+        const n = o.displayName || r.displayName || r.name || null;
+        if (n && n !== "Anonymous") return n;
+      }
+      if (o.type) return getDisplayNameForType(o.type, depth + 1);
+    }
+    if (o.$$typeof === REACT_LAZY_TYPE && o._payload) {
+      const res = (o._payload as { _result?: unknown })._result;
+      if (res != null) return getDisplayNameForType(res, depth + 1);
+    }
     if (typeof o.render === "function") {
       const r = o.render as { displayName?: string; name?: string };
-      return o.displayName || r.displayName || r.name || null;
+      const n = o.displayName || r.displayName || r.name || null;
+      if (n) return n;
     }
-    if (o.type) return getDisplayNameForType(o.type);
+    if (o.type != null) {
+      const inner = getDisplayNameForType(o.type, depth + 1);
+      if (inner) return inner;
+    }
     if (o.displayName) return o.displayName;
   }
   return null;
@@ -63,6 +163,43 @@ function getNameFromFiber(fiber: Fiber): string | null {
   return getDisplayNameForType(type);
 }
 
+/** Prefer innermost (closest to leaf) real name; skip host-only fibers. */
+function resolveNameWalkingUp(start: Fiber | null): string {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 120; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const name = getNameFromFiber(f);
+    if (name && name !== "Anonymous") {
+      return name;
+    }
+    f = f.return;
+  }
+  return "Anonymous";
+}
+
+/** React dev: walk fiber then _debugOwner chain (often escapes anonymous HOC wrappers). */
+function walkDebugOwnersForName(start: Fiber | null): string | null {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 40; d++) {
+    if (typeof f.type !== "string") {
+      const name = getNameFromFiber(f);
+      if (name && name !== "Anonymous") return name;
+    }
+    f = (f._debugOwner as Fiber | null) ?? null;
+  }
+  return null;
+}
+
+function resolveDisplayName(start: Fiber | null): string {
+  if (!start) return "Anonymous";
+  const fromOwner = walkDebugOwnersForName(start);
+  if (fromOwner) return fromOwner;
+  return resolveNameWalkingUp(start);
+}
+
 function getDebugSource(fiber: Fiber): { fileName?: string; lineNumber?: number } | null {
   const src = fiber?._debugSource;
   if (src && typeof src.fileName === "string") {
@@ -70,6 +207,17 @@ function getDebugSource(fiber: Fiber): { fileName?: string; lineNumber?: number 
       fileName: src.fileName,
       lineNumber: typeof src.lineNumber === "number" ? src.lineNumber : undefined,
     };
+  }
+  return null;
+}
+
+function walkDebugOwnersForSource(start: Fiber | null): ReturnType<typeof getDebugSource> {
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 40; d++) {
+    const s = getDebugSource(f);
+    if (s?.fileName) return s;
+    const owner = f._debugOwner as Fiber | null | undefined;
+    f = owner ?? null;
   }
   return null;
 }
@@ -84,7 +232,7 @@ export function findBestFiber(start: Fiber | null): Fiber | null {
   let bestWithSource: Fiber | null = null;
   let bestNamed: Fiber | null = null;
   let depth = 0;
-  while (f && depth < 60) {
+  while (f && depth < 80) {
     const name = getNameFromFiber(f);
     const src = getDebugSource(f);
     if (name && src) {
@@ -108,14 +256,12 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     return { file: "unknown", line: "?", name: "Anonymous" };
   }
 
-  let file = "unknown";
-  let line: string = "?";
-  let name = getNameFromFiber(best) || "Anonymous";
+  const name = resolveDisplayName(best);
 
   const walkForSource = (startFiber: Fiber | null): ReturnType<typeof getDebugSource> => {
     let f: Fiber | null = startFiber;
     let d = 0;
-    while (f && d < 60) {
+    while (f && d < 100) {
       const s = getDebugSource(f);
       if (s?.fileName) return s;
       f = f.return;
@@ -124,7 +270,14 @@ export function resolvePickFromFiber(fiber: Fiber | null): {
     return null;
   };
 
-  const src = getDebugSource(best) || walkForSource(best.return) || walkForSource(best);
+  let file = "unknown";
+  let line: string = "?";
+
+  const src =
+    getDebugSource(best) ||
+    walkDebugOwnersForSource(best) ||
+    walkForSource(best.return) ||
+    walkForSource(best);
   if (src?.fileName) {
     file = normalizeDevPath(src.fileName);
     if (typeof src.lineNumber === "number" && Number.isFinite(src.lineNumber)) {
