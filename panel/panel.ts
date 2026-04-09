@@ -26,6 +26,9 @@ type PickItem = {
   includeState?: boolean;
   propsText?: string | null;
   stateText?: string | null;
+  anchorXPath?: string;
+  /** Tab that created this pick (set by background). */
+  sourceTabId?: number;
 };
 
 let items: PickItem[] = [];
@@ -95,11 +98,16 @@ function setActiveTab(tab: "pending" | "done"): void {
 
 function renderCard(item: PickItem): string {
   const status = item.status ?? "pending";
+  const locateBtn =
+    item.anchorXPath && item.anchorXPath.length > 0
+      ? `<button class="icon" data-action="locate" data-id="${escapeHtml(item.id)}" title="Locate on page">⌖</button>`
+      : "";
   return `
     <article class="card ${status === "done" ? "done" : ""}" data-id="${escapeHtml(item.id)}">
       <div class="row">
         <strong>${escapeHtml(item.componentName)}</strong>
         <div style="display:flex;gap:6px;align-items:center;">
+          ${locateBtn}
           <button class="icon" data-action="toggle" data-id="${escapeHtml(item.id)}" title="${
             status === "done" ? "Mark as pending" : "Mark as done"
           }">${status === "done" ? "↺" : "✓"}</button>
@@ -176,6 +184,49 @@ function render(): void {
   }
 }
 
+const LAST_PICK_TAB_KEY = "rcpLastPickTabId";
+
+async function resolveTabForPick(item: PickItem): Promise<number | undefined> {
+  if (typeof item.sourceTabId === "number") return item.sourceTabId;
+  const data = await chrome.storage.local.get(LAST_PICK_TAB_KEY);
+  const stored = data[LAST_PICK_TAB_KEY];
+  if (typeof stored === "number") return stored;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0]?.id;
+}
+
+async function resolveTabForOverlayClear(): Promise<number | undefined> {
+  const data = await chrome.storage.local.get(LAST_PICK_TAB_KEY);
+  const stored = data[LAST_PICK_TAB_KEY];
+  if (typeof stored === "number") return stored;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0]?.id;
+}
+
+async function locateOnPage(item: PickItem): Promise<void> {
+  const xp = item.anchorXPath;
+  if (!xp) return;
+  const tabId = await resolveTabForPick(item);
+  if (tabId == null) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "LOCATE_ON_PAGE", xpath: xp, tabId });
+  } catch {
+    /* content script missing or wrong tab */
+  }
+}
+
+async function clearPageHighlight(): Promise<void> {
+  const tabId = await resolveTabForOverlayClear();
+  if (tabId == null) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "CLEAR_MARKERS", tabId });
+  } catch {
+    /* */
+  }
+}
+
+let locateFocusTimer: ReturnType<typeof setTimeout> | null = null;
+
 tabPending.addEventListener("click", () => setActiveTab("pending"));
 tabDone.addEventListener("click", () => setActiveTab("done"));
 
@@ -195,6 +246,15 @@ listsWrap.addEventListener("click", (e) => {
     if (!id) return;
     const next = items.map((x) => (x.id === id ? { ...x, includeState: !(x.includeState ?? false) } : x));
     void writeItems(next);
+    return;
+  }
+  const locate = t.closest("button[data-action='locate']") as HTMLButtonElement | null;
+  if (locate) {
+    const id = locate.dataset.id;
+    if (!id) return;
+    const item = items.find((x) => x.id === id);
+    if (!item?.anchorXPath) return;
+    void locateOnPage(item);
     return;
   }
   const toggle = t.closest("button[data-action='toggle']") as HTMLButtonElement | null;
@@ -223,8 +283,47 @@ listsWrap.addEventListener("input", (e) => {
   void chrome.runtime.sendMessage({ type: "UPDATE_PICK_PROMPT", id, prompt: t.value });
 });
 
+/** Any focus inside a card (prompt, ⌖, toggles) keeps / shows the page highlight. */
+listsWrap.addEventListener(
+  "focusin",
+  (e) => {
+    const card = (e.target as HTMLElement).closest("article.card");
+    if (!card) return;
+    const id = card.dataset.id;
+    if (!id) return;
+    const item = items.find((x) => x.id === id);
+    if (!item?.anchorXPath) return;
+    if (locateFocusTimer != null) clearTimeout(locateFocusTimer);
+    locateFocusTimer = setTimeout(() => {
+      locateFocusTimer = null;
+      void locateOnPage(item);
+    }, 280);
+  },
+  true,
+);
+
+/** Remove page overlay when focus leaves the card (not when moving between controls inside it). */
+listsWrap.addEventListener(
+  "focusout",
+  (e) => {
+    const t = e.target;
+    if (!(t instanceof Node)) return;
+    const card = t instanceof Element ? t.closest("article.card") : null;
+    if (!card) return;
+    const next = e.relatedTarget;
+    if (next instanceof Node && card.contains(next)) return;
+    if (locateFocusTimer != null) {
+      clearTimeout(locateFocusTimer);
+      locateFocusTimer = null;
+    }
+    void clearPageHighlight();
+  },
+  true,
+);
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || !changes[STORAGE_KEY]) return;
+  if (areaName !== "local") return;
+  if (!changes[STORAGE_KEY]) return;
   const newVal = ((changes[STORAGE_KEY].newValue as PickItem[] | undefined) ?? []).filter(Boolean);
   const oldVal = ((changes[STORAGE_KEY].oldValue as PickItem[] | undefined) ?? []).filter(Boolean);
   const oldIds = new Set(oldVal.map((x) => x.id));
@@ -240,7 +339,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void refreshFromStorage();
+  if (document.visibilityState === "hidden") {
+    void (async () => {
+      const tabId = await resolveTabForOverlayClear();
+      if (tabId == null) return;
+      try {
+        await chrome.runtime.sendMessage({ type: "CLEAR_MARKERS", tabId });
+      } catch {
+        /* */
+      }
+    })();
+    return;
+  }
+  void refreshFromStorage();
 });
 
 async function sendForReview(): Promise<void> {

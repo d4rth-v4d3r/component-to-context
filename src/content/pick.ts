@@ -14,6 +14,8 @@ import {
   type PickCandidate,
   type PickResolved,
 } from "./page-world-bridge";
+import { initPickMessaging } from "./pick-markers";
+import { getXPathForNode } from "./xpath";
 
 const LOG_PREFIX = "[React Context Picker]";
 const PROMPT_PLACEHOLDER = "";
@@ -33,11 +35,37 @@ type PickItem = {
   includeState: boolean;
   propsText: string | null;
   stateText: string | null;
+  /** XPath to re-find the clicked host for locate / page markers (content script document). */
+  anchorXPath?: string;
 };
 
 function pickUrlPath(): string {
   if (typeof window === "undefined") return "";
   return `${window.location.pathname}${window.location.search}`;
+}
+
+/** Stable XPath for the click target — prefer the element under the cursor, then an Element in the path. */
+function anchorXPathFromEvent(ev: MouseEvent): string {
+  try {
+    const top = document.elementFromPoint(ev.clientX, ev.clientY);
+    if (top instanceof Element) {
+      const xp = getXPathForNode(top);
+      if (xp) return xp;
+    }
+  } catch {
+    /* skip */
+  }
+  for (const n of ev.composedPath()) {
+    if (n instanceof Element) {
+      try {
+        const xp = getXPathForNode(n);
+        if (xp) return xp;
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  return "";
 }
 
 function escapedOneLine(s: string): string {
@@ -281,6 +309,7 @@ function buildPickItem(
   selectionKind: "leaf" | "parent",
   /** When set (page-world path), fibers are readable there but not in the isolated content script. */
   pagePropsState?: { propsText: string | null; stateText: string | null },
+  anchorXPath?: string,
 ): PickItem {
   const file = resolved.file === "unknown" ? "unknown" : resolved.file;
   const { propsText, stateText } =
@@ -299,6 +328,7 @@ function buildPickItem(
     includeState: false,
     propsText,
     stateText,
+    ...(anchorXPath ? { anchorXPath } : {}),
   };
 }
 
@@ -445,7 +475,8 @@ function tryPick(ev: MouseEvent, source: string): void {
     }
 
     const copyName = leafNameForCopy || resolved.name;
-    const item = buildPickItem(clickedText, fiber, resolved, copyName, selectionKind, pagePropsState);
+    const anchorXp = anchorXPathFromEvent(ev);
+    const item = buildPickItem(clickedText, fiber, resolved, copyName, selectionKind, pagePropsState, anchorXp);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK_ITEM", item })
@@ -466,6 +497,8 @@ function onMouseDown(ev: MouseEvent): void {
 
 /** Some trackpads / macOS builds deliver the gesture more reliably on `click`. */
 window.addEventListener("mousedown", onMouseDown, { capture: true, passive: false });
+
+initPickMessaging();
 
 console.info(
   LOG_PREFIX,

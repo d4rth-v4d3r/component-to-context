@@ -1,4 +1,9 @@
 const STORAGE_KEY = "contextItems";
+/** Persisted so marker sync / locate work after the service worker restarts. */
+const LAST_PICK_TAB_KEY = "rcpLastPickTabId";
+
+/** Last tab that sent a pick (content script). Mirrors storage when possible. */
+let lastPickTabId: number | undefined;
 
 type PickItem = {
   id: string;
@@ -14,7 +19,20 @@ type PickItem = {
   includeState?: boolean;
   propsText?: string | null;
   stateText?: string | null;
+  anchorXPath?: string;
+  /** Tab that created this pick (set by background from sender.tab). */
+  sourceTabId?: number;
 };
+
+async function resolveTargetTabId(messageTabId: number | undefined): Promise<number | undefined> {
+  if (typeof messageTabId === "number") return messageTabId;
+  if (typeof lastPickTabId === "number") return lastPickTabId;
+  const data = await chrome.storage.local.get(LAST_PICK_TAB_KEY);
+  const stored = data[LAST_PICK_TAB_KEY];
+  if (typeof stored === "number") return stored;
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0]?.id;
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -32,17 +50,70 @@ chrome.runtime.onMessage.addListener(
       item?: PickItem;
       id?: string;
       prompt?: string;
+      xpath?: string;
+      tabId?: number;
     },
-    _sender,
+    sender,
     sendResponse,
   ) => {
     if (message?.type === "APPEND_PICK_ITEM" && message.item) {
-      void appendItem(message.item)
+      if (typeof sender.tab?.id === "number") {
+        lastPickTabId = sender.tab.id;
+        void chrome.storage.local.set({ [LAST_PICK_TAB_KEY]: sender.tab.id });
+      }
+      const item: PickItem = {
+        ...message.item,
+        ...(typeof sender.tab?.id === "number" ? { sourceTabId: sender.tab.id } : {}),
+      };
+      void appendItem(item)
         .then(() => sendResponse({ ok: true }))
         .catch((e: unknown) => {
           console.error("[React Context Picker] appendItem failed", e);
           sendResponse({ ok: false, error: String(e) });
         });
+      return true;
+    }
+    if (message?.type === "LOCATE_ON_PAGE" && typeof message.xpath === "string") {
+      void (async () => {
+        try {
+          const tabId = await resolveTargetTabId(message.tabId);
+          if (tabId == null) {
+            sendResponse({ ok: false, error: "no_tab" });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId, { type: "HIGHLIGHT_ANCHOR", xpath: message.xpath }, (response) => {
+            const err = chrome.runtime.lastError;
+            if (err) sendResponse({ ok: false, error: err.message });
+            else sendResponse(response ?? { ok: true });
+          });
+        } catch (e: unknown) {
+          sendResponse({ ok: false, error: String(e) });
+        }
+      })();
+      return true;
+    }
+    if (message?.type === "SYNC_MARKERS") {
+      /* No-op: page markers removed; highlight is panel-triggered only. */
+      sendResponse({ ok: true });
+      return true;
+    }
+    if (message?.type === "CLEAR_MARKERS") {
+      void (async () => {
+        try {
+          const tabId = await resolveTargetTabId(message.tabId);
+          if (tabId == null) {
+            sendResponse({ ok: true });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId, { type: "CLEAR_MARKERS" }, (response) => {
+            const err = chrome.runtime.lastError;
+            if (err) sendResponse({ ok: false, error: err.message });
+            else sendResponse(response ?? { ok: true });
+          });
+        } catch (e: unknown) {
+          sendResponse({ ok: false, error: String(e) });
+        }
+      })();
       return true;
     }
     // Backward compatibility with old sender.

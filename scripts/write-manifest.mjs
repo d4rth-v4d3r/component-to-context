@@ -25,7 +25,7 @@ const manifest = {
   description:
     "Dev-only: Shift+Alt+click React components on local URLs to build AI context (file, name, route). Chrome only.",
   minimum_chrome_version: "114",
-  permissions: ["sidePanel", "storage", "clipboardWrite"],
+  permissions: ["sidePanel", "storage", "clipboardWrite", "tabs"],
   host_permissions: [...matches],
   web_accessible_resources: [
     {
