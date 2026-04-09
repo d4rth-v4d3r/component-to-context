@@ -10,22 +10,40 @@ const DEV_PORTS = [
   3000, 3001, 3500, 4000, 4173, 5000, 5173, 5174, 8080, 8081, 8888, 9000, 1355, 9323,
 ];
 
-const hosts = ["localhost", "*.localhost", "127.0.0.1"];
 const schemes = ["http", "https"];
 
-/** @type {string[]} */
+/**
+ * Chrome `*.localhost` matches only **one** label (`foo.localhost`), not
+ * `a.b.localhost`. Dev URLs like `x.y.web-ui.localhost` need `*.*.localhost`, etc.
+ */
+const LOCALHOST_LABEL_DEPTH = 6;
+
+/** @type {Set<string>} */
 const matches = new Set();
 
+function add(p) {
+  matches.add(p);
+}
+
 for (const scheme of schemes) {
-  for (const host of hosts) {
-    matches.add(`${scheme}://${host}/*`);
+  add(`${scheme}://localhost/*`);
+  add(`${scheme}://127.0.0.1/*`);
+}
+
+for (let depth = 1; depth <= LOCALHOST_LABEL_DEPTH; depth++) {
+  const host = `${Array(depth).fill("*").join(".")}.localhost`;
+  for (const scheme of schemes) {
+    add(`${scheme}://${host}/*`);
   }
 }
 
 for (const port of DEV_PORTS) {
   for (const scheme of schemes) {
-    for (const host of hosts) {
-      matches.add(`${scheme}://${host}:${port}/*`);
+    add(`${scheme}://localhost:${port}/*`);
+    add(`${scheme}://127.0.0.1:${port}/*`);
+    for (let depth = 1; depth <= LOCALHOST_LABEL_DEPTH; depth++) {
+      const host = `${Array(depth).fill("*").join(".")}.localhost`;
+      add(`${scheme}://${host}:${port}/*`);
     }
   }
 }
@@ -35,7 +53,7 @@ const manifest = {
   name: "React Context Picker",
   version: "1.0.0",
   description:
-    "Dev-only: Alt+click React components on local URLs to build AI context (file, name, route). Chrome only.",
+    "Dev-only: Shift+Alt+click React components on local URLs to build AI context (file, name, route). Chrome only.",
   minimum_chrome_version: "114",
   permissions: ["sidePanel", "storage", "clipboardWrite"],
   host_permissions: [...matches],

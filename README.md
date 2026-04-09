@@ -1,6 +1,6 @@
 # React Context Picker (Chrome extension)
 
-**Google Chrome only.** Dev-only helper: hold **Alt** (Windows/Linux) or **Option** (macOS), then **left-click** a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
+**Google Chrome only.** Dev-only helper: hold **Shift+Alt** (Windows/Linux) or **Shift+Option** (macOS), then **left-click** a DOM node on a local React/Next dev server to append component context (`@file:line`, name, current path + query) to a side panel. Use **Copy all** to paste into an AI agent.
 
 ## Prerequisites
 
@@ -39,7 +39,7 @@ Then reload the extension in Chrome after each rebuild (see below).
 1. Start your **local** Next.js or React app (e.g. `npm run dev`) so it is served on an allowed URL (see [Allowed URLs](#allowed-urls)).
 2. Open that app in Chrome (e.g. `http://localhost:3000` or `http://something.web-ui.localhost:1355/...`).
 3. Click the extension’s **toolbar icon** to open the **side panel** (the extension is configured to open the side panel when you click the icon).
-4. Hold **Alt** (Windows/Linux) or **Option** (macOS) and **left-click** a visible UI element that belongs to your React tree. Each click **appends** a block to the textarea.
+4. Hold **Shift+Alt** (Windows/Linux) or **Shift+Option** (macOS) and **left-click** a visible UI element that belongs to your React tree. Each click **appends** a block to the textarea.
 5. Click **Copy all** at the bottom and paste into your agent. Use **Clear** to reset the buffer.
 
 **What to expect**
@@ -49,10 +49,9 @@ Then reload the extension in Chrome after each rebuild (see below).
 
 ## Allowed URLs
 
-The generated `manifest.json` matches:
+The generated `manifest.json` matches `localhost`, `127.0.0.1`, and **multi-level** `*.localhost` hosts (Chrome’s `*.localhost` alone only matches **one** label; URLs like `a.b.web-ui.localhost` need `*.*.localhost`, which this script generates up to **six** labels).
 
-- `http://localhost/*`, `https://localhost/*`, and the same for **`*.localhost`** (nested subdomains) and **`127.0.0.1`**, with **default ports** (80 / 443) and these **explicit ports**:  
-  `3000`, `3001`, `3500`, `4000`, `4173`, `5000`, `5173`, `5174`, `8080`, `8081`, `8888`, `9000`, `1355`, `9323`.
+**Explicit ports** include: `3000`, `3001`, `3500`, `4000`, `4173`, `5000`, `5173`, `5174`, `8080`, `8081`, `8888`, `9000`, `1355`, `9323`, plus default **80** / **443** for bare `localhost` / `127.0.0.1` patterns.
 
 If your dev server uses **another port**, add it to the `DEV_PORTS` array in [`scripts/write-manifest.mjs`](scripts/write-manifest.mjs), run **`npm run build`** again, and use **Reload** on the extension in `chrome://extensions`.
 
@@ -64,10 +63,10 @@ If your dev server uses **another port**, add it to the `DEV_PORTS` array in [`s
 
 ## Troubleshooting
 
-- **Nothing happens when holding Option/Alt and clicking**  
-  - Confirm the page URL matches an [allowed pattern](#allowed-urls) (scheme, host, **port**).  
-  - **Reload** the extension on `chrome://extensions` and **refresh** the tab (content scripts update only after that).  
-  - Hold the modifier **before** the click; the handler listens on `mousedown` in capture phase.
+- **Nothing happens when using the chord**  
+  - Confirm the page URL matches an [allowed pattern](#allowed-urls) (scheme, host, **port**). Multi-segment hosts like `x.y.localhost` require the rebuilt manifest (see [Allowed URLs](#allowed-urls)).  
+  - **Reload** the extension on `chrome://extensions` and **refresh** the tab.  
+  - Use **Shift+Option** (mac) or **Shift+Alt** (Win/Linux), then click; the handler uses `mousedown` on `window` capture and stops propagation so app click handlers should not run.
 
 - **No file/line or lots of `Anonymous`**  
   - Use a **development** build (`next dev`, Vite dev, etc.), not production.  
