@@ -52,7 +52,7 @@ export function isPickerDebugEnabled(): boolean {
  * so `Object.keys` misses them — use `Reflect.ownKeys`.
  * React 19 may expose `element._reactInternals` (same fiber reference).
  */
-function getFiberFromDevToolsRenderers(el: Element): Fiber | null {
+function getFiberFromDevToolsRenderers(host: Element | Text): Fiber | null {
   try {
     const hook = (
       window as unknown as {
@@ -69,12 +69,28 @@ function getFiberFromDevToolsRenderers(el: Element): Fiber | null {
     for (const [, renderer] of renderers) {
       const fn = renderer?.findFiberByHostInstance;
       if (typeof fn === "function") {
-        const f = fn(el);
+        const f = fn(host);
         if (looksLikeFiber(f)) return f as Fiber;
       }
     }
   } catch {
     /* ignore */
+  }
+  return null;
+}
+
+function fiberFromReactKeys(host: Element | Text): Fiber | null {
+  const anyHost = host as Record<string | symbol, unknown>;
+  for (const key of Reflect.ownKeys(host)) {
+    if (typeof key === "string") {
+      if (key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")) {
+        const f = anyHost[key];
+        if (looksLikeFiber(f)) return f as Fiber;
+      }
+    } else {
+      const v = anyHost[key as symbol];
+      if (looksLikeFiber(v)) return v as Fiber;
+    }
   }
   return null;
 }
@@ -89,31 +105,34 @@ function getFiberFromElement(el: Element): Fiber | null {
     if (looksLikeFiber(root.current)) return root.current as Fiber;
   }
 
-  for (const key of Reflect.ownKeys(el)) {
-    if (typeof key === "string") {
-      if (key.startsWith("__reactFiber$") || key.startsWith("__reactInternalInstance$")) {
-        const f = anyEl[key];
-        if (looksLikeFiber(f)) return f as Fiber;
-      }
-    } else {
-      const v = anyEl[key as symbol];
-      if (looksLikeFiber(v)) return v as Fiber;
-    }
-  }
+  const fromKeys = fiberFromReactKeys(el);
+  if (fromKeys) return fromKeys;
 
   return getFiberFromDevToolsRenderers(el);
 }
 
-/** Walk DOM ancestors and try shadow/composed paths. */
+/**
+ * React attaches `__reactFiber$…` to **Text** as well as **Element** host instances.
+ * We previously only checked parents of Text — clicks on labels often hit Text nodes first.
+ */
+export function getFiberFromHostInstance(host: Element | Text): Fiber | null {
+  if (host instanceof Text) {
+    const k = fiberFromReactKeys(host);
+    if (k) return k;
+    return getFiberFromDevToolsRenderers(host);
+  }
+  return getFiberFromElement(host);
+}
+
+/** Walk DOM ancestors (including Text nodes) and try shadow/composed paths. */
 export function getFiberFromNode(start: Node | null): Fiber | null {
-  let el: Element | null =
-    start instanceof Element ? start : start?.parentElement ?? null;
-  let hops = 0;
-  while (el && hops < 80) {
-    const fiber = getFiberFromElement(el);
-    if (fiber) return fiber;
-    el = el.parentElement;
-    hops++;
+  let n: Node | null = start;
+  for (let hops = 0; n && hops < 200; hops++) {
+    if (n instanceof Element || n instanceof Text) {
+      const fiber = getFiberFromHostInstance(n);
+      if (fiber) return fiber;
+    }
+    n = n.parentNode;
   }
   return null;
 }
@@ -122,14 +141,46 @@ export function getFiberFromNode(start: Node | null): Fiber | null {
 export function getFiberFromComposedPath(ev: Event): Fiber | null {
   const path = ev.composedPath();
   for (const n of path) {
-    const el =
-      n instanceof Element ? n : n instanceof Text ? (n.parentElement as Element | null) : null;
-    if (el) {
-      const fiber = getFiberFromElement(el);
+    if (n instanceof Element || n instanceof Text) {
+      const fiber = getFiberFromHostInstance(n);
       if (fiber) return fiber;
     }
   }
   return getFiberFromNode(ev.target instanceof Node ? ev.target : null);
+}
+
+/** DevTools renderer count (0 often means prod build or non-React page). */
+export function getReactDevtoolsRendererCount(): number {
+  try {
+    const hook = (
+      globalThis as unknown as {
+        __REACT_DEVTOOLS_GLOBAL_HOOK__?: { renderers?: Map<unknown, unknown> };
+      }
+    ).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    return hook?.renderers?.size ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** When no fiber is found — log actionable context if debug is on. */
+export function logFiberLookupMiss(ev: MouseEvent): void {
+  if (!isPickerDebugEnabled()) return;
+  const path = ev.composedPath();
+  const summary = path.slice(0, 14).map((n) => {
+    if (n instanceof Window) return "Window";
+    if (n instanceof Document) return "Document";
+    if (n instanceof Element) return `<${n.tagName.toLowerCase()}>`;
+    if (n instanceof Text) return `#text`;
+    return n?.constructor?.name ?? String(n);
+  });
+  console.info("[React Context Picker][fiber]", "fiber_lookup_miss", {
+    target: ev.target instanceof Node ? ev.target.nodeName : typeof ev.target,
+    pathHead: summary,
+    reactDevtoolsRenderers: getReactDevtoolsRendererCount(),
+    hint:
+      "Clicks often target #text — fixed in this build. If still miss: prod React, iframe, or non-React DOM.",
+  });
 }
 
 const REACT_MEMO_TYPE = Symbol.for("react.memo");

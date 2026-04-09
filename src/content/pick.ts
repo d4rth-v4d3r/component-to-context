@@ -3,6 +3,7 @@ import {
   findBestFiber,
   getMemoizedProps,
   isPickerDebugEnabled,
+  logFiberLookupMiss,
   resolvePickFromFiber,
   serializePropsForContext,
 } from "./fiber";
@@ -98,6 +99,9 @@ function tryPick(ev: MouseEvent, source: string): void {
   ev.stopImmediatePropagation();
 
   const fiber = getFiberFromComposedPath(ev);
+  if (!fiber && isPickerDebugEnabled()) {
+    logFiberLookupMiss(ev);
+  }
   const route =
     typeof window !== "undefined"
       ? `${window.location.pathname}${window.location.search}`
