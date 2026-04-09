@@ -24,6 +24,13 @@ type Candidate = {
   pathIndex: number;
 };
 
+type PickCandidate = {
+  resolved: ReturnType<typeof resolvePickFromFiber>;
+  layer: Candidate["layer"];
+  pathIndex: number;
+  score: number;
+};
+
 function classifyLayer(node: Node): "page" | "dialog" | "form" | "none" {
   const el = node instanceof Element ? node : node.parentElement;
   if (!el) return "none";
@@ -76,12 +83,39 @@ function pickRankedFiber(xpaths: string[]): ReturnType<typeof getFiberFromHostIn
   return candidates[0].fiber;
 }
 
+function buildPickCandidates(xpaths: string[]): PickCandidate[] {
+  const out: PickCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < xpaths.length; i++) {
+    const xp = xpaths[i];
+    const node = evalXPath(xp);
+    if (!node || !(node instanceof Element || node instanceof Text)) continue;
+    const fiber = getFiberFromHostInstance(node);
+    if (!fiber) continue;
+
+    const layer = classifyLayer(node);
+    const score = layerScore(layer) - i;
+    const resolved = resolvePickFromFiber(fiber);
+    if (resolved.file === "unknown" && resolved.name === "Anonymous") continue;
+
+    const key = `${resolved.file}|${resolved.line}|${resolved.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ resolved, layer, pathIndex: i, score });
+  }
+
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, 10);
+}
+
 function handleMessage(ev: MessageEvent): void {
   if (ev.source !== window || ev.data?.type !== MSG_GET) return;
   const { requestId, xpaths } = ev.data as { requestId?: string; xpaths?: string[] };
   if (!requestId || !Array.isArray(xpaths)) return;
 
   let fiber = pickRankedFiber(xpaths);
+  const candidates = buildPickCandidates(xpaths);
 
   if (!fiber && xpaths.length > 0) {
     const node = evalXPath(xpaths[0]);
@@ -91,7 +125,7 @@ function handleMessage(ev: MessageEvent): void {
   }
 
   const resolved = resolvePickFromFiber(fiber);
-  window.postMessage({ type: MSG_RESULT, requestId, resolved }, "*");
+  window.postMessage({ type: MSG_RESULT, requestId, resolved, candidates }, "*");
 }
 
 if (!(document.documentElement as HTMLElement).dataset.rcpPageWorld) {

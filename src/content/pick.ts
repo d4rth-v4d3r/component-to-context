@@ -7,7 +7,11 @@ import {
   resolvePickFromFiber,
   serializePropsForContext,
 } from "./fiber";
-import { resolvePickViaPageWorld, type PickResolved } from "./page-world-bridge";
+import {
+  resolvePickViaPageWorld,
+  type PickCandidate,
+  type PickResolved,
+} from "./page-world-bridge";
 
 const LOG_PREFIX = "[React Context Picker]";
 
@@ -18,6 +22,139 @@ function pickUrlPath(): string {
 
 function escapedOneLine(s: string): string {
   return s.replace(/\s+/g, " ").replace(/"/g, '\\"').trim();
+}
+
+function lineSuffix(line: string): string {
+  return line !== "?" && Number.isFinite(Number(line)) ? `:${line}` : "";
+}
+
+/**
+ * Build shortest unique display paths from candidate files.
+ * No hardcoded `src`: we compute a minimal unique tail for each path.
+ */
+function buildShortDisplayPathMap(candidates: PickCandidate[]): Map<string, string> {
+  const split = (p: string): string[] => p.split("/").filter(Boolean);
+  const files = candidates.map((c) => c.resolved.file);
+  const segments = files.map(split);
+  const out = new Map<string, string>();
+
+  for (let i = 0; i < files.length; i++) {
+    const segs = segments[i];
+    let use = segs.length;
+    for (let n = 1; n <= segs.length; n++) {
+      const tail = segs.slice(-n).join("/");
+      const unique = segments.every((other, j) => {
+        if (j === i) return true;
+        return other.slice(-n).join("/") !== tail;
+      });
+      if (unique) {
+        use = n;
+        break;
+      }
+    }
+    out.set(files[i], segs.slice(-use).join("/") || files[i]);
+  }
+
+  return out;
+}
+
+/** Quick in-page chooser for multiple named parent candidates. */
+function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | null> {
+  if (!candidates.length) return Promise.resolve(null);
+  if (candidates.length === 1) return Promise.resolve(candidates[0].resolved);
+
+  return new Promise((resolve) => {
+    const shortPathMap = buildShortDisplayPathMap(candidates);
+    const root = document.createElement("div");
+    root.id = "rcp-candidate-picker";
+    root.style.cssText =
+      "position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:2147483647;display:flex;align-items:center;justify-content:center;";
+
+    const panel = document.createElement("div");
+    panel.style.cssText =
+      "width:min(780px,92vw);background:#111827;color:#f9fafb;border:1px solid #374151;border-radius:12px;padding:12px;box-shadow:0 12px 28px rgba(0,0,0,.45);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;";
+
+    const title = document.createElement("div");
+    title.textContent = "React Context Picker: select parent component";
+    title.style.cssText = "font-weight:700;margin-bottom:8px;";
+    panel.appendChild(title);
+
+    const list = document.createElement("div");
+    list.style.cssText = "max-height:222px;overflow:auto;padding-right:2px;";
+
+    candidates.forEach((c, idx) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.style.cssText =
+        "display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;text-align:left;margin:0 0 6px;padding:8px;border-radius:8px;border:1px solid #374151;background:#1f2937;color:#f9fafb;cursor:pointer;";
+      btn.onclick = () => done(c.resolved);
+
+      const left = document.createElement("div");
+      left.style.cssText = "min-width:0;";
+      const name = document.createElement("div");
+      name.textContent = c.resolved.name;
+      name.style.cssText = "font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      const file = document.createElement("div");
+      const shortPath = shortPathMap.get(c.resolved.file) ?? c.resolved.file;
+      file.textContent = `${shortPath}${lineSuffix(c.resolved.line)}`;
+      file.style.cssText = "opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      left.appendChild(name);
+      left.appendChild(file);
+
+      const right = document.createElement("div");
+      right.style.cssText = "display:flex;gap:6px;flex-shrink:0;align-items:center;";
+      const keyBadge = document.createElement("span");
+      keyBadge.textContent = `${idx + 1}`;
+      keyBadge.style.cssText =
+        "padding:2px 7px;border-radius:999px;background:#0f172a;border:1px solid #334155;opacity:.95;";
+      const layerBadge = document.createElement("span");
+      layerBadge.textContent = c.layer;
+      layerBadge.style.cssText =
+        "padding:2px 8px;border-radius:999px;background:#1e293b;border:1px solid #334155;text-transform:uppercase;font-size:10px;letter-spacing:.04em;";
+      right.appendChild(keyBadge);
+      right.appendChild(layerBadge);
+
+      btn.appendChild(left);
+      btn.appendChild(right);
+      list.appendChild(btn);
+    });
+    panel.appendChild(list);
+
+    const hint = document.createElement("div");
+    hint.textContent = "Esc to cancel, 1-9 to pick quickly";
+    hint.style.cssText = "opacity:.75;padding:4px 2px 0;";
+    panel.appendChild(hint);
+
+    root.appendChild(panel);
+    document.documentElement.appendChild(root);
+
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        done(null);
+        return;
+      }
+      const n = Number(e.key);
+      if (Number.isFinite(n) && n >= 1 && n <= candidates.length) {
+        e.preventDefault();
+        done(candidates[n - 1].resolved);
+      }
+    };
+
+    const onClickBackdrop = (e: MouseEvent): void => {
+      if (e.target === root) done(null);
+    };
+
+    function done(value: PickResolved | null): void {
+      window.removeEventListener("keydown", onKey, true);
+      root.removeEventListener("mousedown", onClickBackdrop, true);
+      root.remove();
+      resolve(value);
+    }
+
+    window.addEventListener("keydown", onKey, true);
+    root.addEventListener("mousedown", onClickBackdrop, true);
+  });
 }
 
 /** Prefer clicked node text; if empty, walk up to nearest ancestor with readable text. */
@@ -145,10 +282,21 @@ function tryPick(ev: MouseEvent, source: string): void {
       }
       try {
         const fromPage = await resolvePickViaPageWorld(ev);
-        if (fromPage && (fromPage.file !== "unknown" || fromPage.name !== "Anonymous")) {
-          resolved = fromPage;
+        if (
+          fromPage?.resolved &&
+          (fromPage.resolved.file !== "unknown" || fromPage.resolved.name !== "Anonymous")
+        ) {
+          const chosen = await chooseCandidate(fromPage.candidates);
+          resolved = chosen ?? fromPage.resolved;
           if (isPickerDebugEnabled()) {
-            console.info(LOG_PREFIX, "page_world_resolve", { resolved });
+            console.info(LOG_PREFIX, "page_world_resolve", {
+              resolved,
+              candidates: fromPage.candidates.map((c) => ({
+                name: c.resolved.name,
+                file: `${c.resolved.file}${lineSuffix(c.resolved.line)}`,
+                layer: c.layer,
+              })),
+            });
           }
         }
       } catch (e) {

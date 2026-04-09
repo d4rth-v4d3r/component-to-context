@@ -5,6 +5,16 @@ const MSG_GET = "__rcp__get_fiber";
 const MSG_RESULT = "__rcp__fiber_result";
 
 export type PickResolved = ReturnType<typeof resolvePickFromFiber>;
+export type PickCandidate = {
+  resolved: PickResolved;
+  layer: "page" | "dialog" | "form" | "none";
+  pathIndex: number;
+  score: number;
+};
+export type PageWorldPickResult = {
+  resolved: PickResolved;
+  candidates: PickCandidate[];
+};
 
 let loadPromise: Promise<void> | null = null;
 
@@ -56,7 +66,7 @@ function collectXpathsFromEvent(ev: MouseEvent): string[] {
  * Resolve pick metadata in the page JS realm (reads `__reactFiber$` on hosts).
  * Falls back when the isolated content script sees no fiber (prod React).
  */
-export async function resolvePickViaPageWorld(ev: MouseEvent): Promise<PickResolved | null> {
+export async function resolvePickViaPageWorld(ev: MouseEvent): Promise<PageWorldPickResult | null> {
   const xpaths = collectXpathsFromEvent(ev);
   if (!xpaths.length) return null;
 
@@ -74,7 +84,10 @@ export async function resolvePickViaPageWorld(ev: MouseEvent): Promise<PickResol
       if (e.data.requestId !== requestId) return;
       window.clearTimeout(timeout);
       window.removeEventListener("message", onMsg);
-      resolve(e.data.resolved as PickResolved);
+      resolve({
+        resolved: e.data.resolved as PickResolved,
+        candidates: Array.isArray(e.data.candidates) ? (e.data.candidates as PickCandidate[]) : [],
+      });
     };
 
     window.addEventListener("message", onMsg, false);
