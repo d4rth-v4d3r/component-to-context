@@ -7,7 +7,6 @@ import {
   getFiberFromNode,
   getFiberFromHostInstance,
   nearestLeafNamedWithFile,
-  resolveOutermostNamedInSameFile,
   resolvePickFromFiber,
 } from "./fiber";
 
@@ -129,17 +128,7 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
 
     const layer = classifyLayer(node);
     const score = layerScore(layer) - i;
-    const resolvedBase = resolvePickFromFiber(fiber);
-    const outerNamed = resolveOutermostNamedInSameFile(fiber);
-    const resolved = outerNamed
-      ? {
-          ...resolvedBase,
-          name: outerNamed.name,
-          file: outerNamed.file,
-          line: outerNamed.line,
-          omitLine: outerNamed.line === "?",
-        }
-      : resolvedBase;
+    const resolved = resolvePickFromFiber(fiber);
     // Strict list rule: show only named, non-anonymous entries with a valid local project file.
     if (resolved.name === "Anonymous" || resolved.file === "unknown" || !isLocalProjectFile(resolved.file)) {
       continue;
@@ -148,22 +137,38 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     const key = `${resolved.file}|${resolved.line}|${resolved.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ resolved, layer, pathIndex: i, score });
+    out.push({ resolved, layer, pathIndex: i, score, kind: "leaf" });
   }
 
-  // Collapse repeats from same file: keep the outermost candidate in that file.
-  const byFile = new Map<string, PickCandidate>();
+  // Keep both ends per file: nearest leaf and outermost parent (if different).
+  const grouped = new Map<string, PickCandidate[]>();
   for (const c of out) {
-    const prev = byFile.get(c.resolved.file);
-    if (!prev || c.pathIndex > prev.pathIndex) {
-      byFile.set(c.resolved.file, c);
+    const arr = grouped.get(c.resolved.file) ?? [];
+    arr.push(c);
+    grouped.set(c.resolved.file, arr);
+  }
+
+  const kept: PickCandidate[] = [];
+  const seenKept = new Set<string>();
+  for (const [, arr] of grouped) {
+    arr.sort((a, b) => a.pathIndex - b.pathIndex);
+    const leaf = arr[0];
+    const parent = arr[arr.length - 1];
+    const withKinds: PickCandidate[] = [
+      { ...leaf, kind: "leaf" },
+      { ...parent, kind: "parent" },
+    ];
+    for (const c of withKinds) {
+      const key = `${c.resolved.file}|${c.resolved.line}|${c.resolved.name}`;
+      if (seenKept.has(key)) continue;
+      seenKept.add(key);
+      kept.push(c);
     }
   }
 
-  const uniq = [...byFile.values()];
-  // File list order remains nearest-first across different files.
-  uniq.sort((a, b) => a.pathIndex - b.pathIndex);
-  return uniq.slice(0, 10);
+  // Show nearest-first in dropdown across files.
+  kept.sort((a, b) => a.pathIndex - b.pathIndex);
+  return kept.slice(0, 10);
 }
 
 function handleMessage(ev: MessageEvent): void {
