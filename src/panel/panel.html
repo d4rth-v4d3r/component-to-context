@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>React Context Picker</title>
+  </head>
+  <body>
+    <header class="hdr">
+      <h1>React Context Picker</h1>
+      <p class="hint">
+        <kbd>Alt</kbd>+click (mac: <kbd>Option</kbd>+click) a component on your dev page. Each pick
+        appends below.
+      </p>
+    </header>
+    <textarea id="buf" spellcheck="false" aria-label="Accumulated context"></textarea>
+    <footer class="ft">
+      <button type="button" id="copy" class="btn primary">Copy all</button>
+      <button type="button" id="clear" class="btn">Clear</button>
+    </footer>
+    <script type="module" src="./panel.ts"></script>
+  </body>
+</html>
