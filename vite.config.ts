@@ -6,6 +6,8 @@ const root = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root,
+  /** Relative asset URLs for `chrome-extension://` side panel pages. */
+  base: "./",
   publicDir: false,
   build: {
     outDir: "dist",
@@ -16,7 +18,7 @@ export default defineConfig({
       input: {
         background: resolve(root, "src/background.ts"),
         pick: resolve(root, "src/content/pick.ts"),
-        panel: resolve(root, "src/panel/panel.html"),
+        panel: resolve(root, "panel/panel.html"),
       },
       output: {
         entryFileNames(chunkInfo) {
