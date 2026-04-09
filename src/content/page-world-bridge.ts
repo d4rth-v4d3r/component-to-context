@@ -10,6 +10,7 @@ export type PickCandidate = {
   layer: "page" | "dialog" | "form" | "none";
   pathIndex: number;
   score: number;
+  kind: "leaf" | "parent";
 };
 export type PageWorldPickResult = {
   resolved: PickResolved;

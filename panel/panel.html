@@ -13,9 +13,10 @@
         appends below.
       </p>
     </header>
-    <textarea id="buf" spellcheck="false" aria-label="Accumulated context"></textarea>
+    <main id="list" class="list" aria-label="Accumulated context items"></main>
     <footer class="ft">
-      <button type="button" id="copy" class="btn primary">Copy all</button>
+      <button type="button" id="copyClear" class="btn primary">Copy &amp; Clear</button>
+      <button type="button" id="copy" class="btn">Copy</button>
       <button type="button" id="clear" class="btn">Clear</button>
     </footer>
     <script type="module" src="./panel.ts"></script>

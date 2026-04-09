@@ -15,6 +15,18 @@ import {
 } from "./page-world-bridge";
 
 const LOG_PREFIX = "[React Context Picker]";
+const PROMPT_PLACEHOLDER = "";
+
+type PickItem = {
+  id: string;
+  file: string;
+  line: string;
+  componentName: string;
+  textContent: string;
+  url: string;
+  prompt: string;
+  selectionKind: "leaf" | "parent";
+};
 
 function pickUrlPath(): string {
   if (typeof window === "undefined") return "";
@@ -116,9 +128,9 @@ function buildShortDisplayPathMap(candidates: PickCandidate[]): Map<string, stri
 }
 
 /** Quick in-page chooser for multiple named parent candidates. */
-function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | null> {
+function chooseCandidate(candidates: PickCandidate[]): Promise<PickCandidate | null> {
   if (!candidates.length) return Promise.resolve(null);
-  if (candidates.length === 1) return Promise.resolve(candidates[0].resolved);
+  if (candidates.length === 1) return Promise.resolve(candidates[0]);
 
   return new Promise((resolve) => {
     const shortPathMap = buildShortDisplayPathMap(candidates);
@@ -144,7 +156,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | nu
       btn.type = "button";
       btn.style.cssText =
         "display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;text-align:left;margin:0 0 6px;padding:8px;border-radius:8px;border:1px solid #374151;background:#1f2937;color:#f9fafb;cursor:pointer;";
-      btn.onclick = () => done(c.resolved);
+      btn.onclick = () => done(c);
 
       const left = document.createElement("div");
       left.style.cssText = "min-width:0;";
@@ -194,7 +206,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | nu
       const n = Number(e.key);
       if (Number.isFinite(n) && n >= 1 && n <= candidates.length) {
         e.preventDefault();
-        done(candidates[n - 1].resolved);
+        done(candidates[n - 1]);
       }
     };
 
@@ -202,7 +214,7 @@ function chooseCandidate(candidates: PickCandidate[]): Promise<PickResolved | nu
       if (e.target === root) done(null);
     };
 
-    function done(value: PickResolved | null): void {
+    function done(value: PickCandidate | null): void {
       window.removeEventListener("keydown", onKey, true);
       root.removeEventListener("mousedown", onClickBackdrop, true);
       root.remove();
@@ -253,6 +265,25 @@ function formatBlock(
   if (!json) return `${primary}\n${urlLine}`;
 
   return `${primary}\n${urlLine}\n- Props: ${json}`;
+}
+
+function buildPickItem(
+  fiber: ReturnType<typeof getFiberFromComposedPath>,
+  resolved: PickResolved,
+  componentName: string,
+  selectionKind: "leaf" | "parent",
+): PickItem {
+  const file = resolved.file === "unknown" ? "unknown" : resolved.file;
+  return {
+    id: crypto.randomUUID(),
+    file,
+    line: resolved.line,
+    componentName,
+    textContent: pickComponentText(fiber),
+    url: pickUrlPath(),
+    prompt: PROMPT_PLACEHOLDER,
+    selectionKind,
+  };
 }
 
 /**
@@ -332,6 +363,7 @@ function tryPick(ev: MouseEvent, source: string): void {
     let fiber = getFiberFromComposedPath(ev);
     let resolved: PickResolved = resolvePickFromFiber(fiber);
     let leafNameForCopy: string | null = nearestLeafNamedWithFile(fiber);
+    let selectionKind: "leaf" | "parent" = "leaf";
 
     const needPageWorld =
       !fiber || (resolved.file === "unknown" && resolved.name === "Anonymous");
@@ -347,7 +379,8 @@ function tryPick(ev: MouseEvent, source: string): void {
           (fromPage.resolved.file !== "unknown" || fromPage.resolved.name !== "Anonymous")
         ) {
           const chosen = await chooseCandidate(fromPage.candidates);
-          resolved = chosen ?? fromPage.resolved;
+          resolved = chosen?.resolved ?? fromPage.resolved;
+          selectionKind = chosen?.kind ?? "leaf";
           leafNameForCopy = fromPage.leafName ?? leafNameForCopy;
           if (isPickerDebugEnabled()) {
             console.info(LOG_PREFIX, "page_world_resolve", {
@@ -355,8 +388,10 @@ function tryPick(ev: MouseEvent, source: string): void {
               candidates: fromPage.candidates.map((c) => ({
                 file: `${c.resolved.file}${lineSuffix(c.resolved.line)}`,
                 layer: c.layer,
+                kind: c.kind,
               })),
               leafNameForCopy,
+              selectionKind,
             });
           }
         }
@@ -367,13 +402,14 @@ function tryPick(ev: MouseEvent, source: string): void {
       }
     }
 
-    const block = formatBlock(fiber, resolved, leafNameForCopy);
+    const copyName = leafNameForCopy || resolved.name;
+    const item = buildPickItem(fiber, resolved, copyName, selectionKind);
 
     void chrome.runtime
-      .sendMessage({ type: "APPEND_PICK", block })
+      .sendMessage({ type: "APPEND_PICK_ITEM", item })
       .then(() => {
         console.info(LOG_PREFIX, "pick sent (open side panel → textarea or Copy all)", {
-          preview: block.slice(0, 120),
+          preview: `${item.file}:${item.line} ${item.componentName}`.slice(0, 120),
         });
       })
       .catch((err: unknown) => {

@@ -58,38 +58,97 @@ kbd {
   background: color-mix(in srgb, var(--bg) 85%, var(--fg));
 }
 
-#buf {
+.list {
   flex: 1;
-  min-height: 200px;
-  margin: 0;
-  padding: 12px;
-  border: none;
-  resize: none;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: var(--bg);
-  color: var(--fg);
+  min-height: 240px;
+  padding: 10px 12px;
+  overflow: auto;
 }
 
-#buf:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+.empty {
+  color: var(--muted);
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: color-mix(in srgb, var(--bg) 92%, var(--fg));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: color-mix(in srgb, var(--bg) 84%, var(--fg));
+}
+
+.url {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+.icon {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
 }
 
 .ft {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   padding: 10px 14px 14px;
   border-top: 1px solid var(--border);
 }
 
 .btn {
-  padding: 8px 14px;
+  padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
   cursor: pointer;
+  flex: 1;
 }
 
 .btn:hover {
