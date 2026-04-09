@@ -79,7 +79,9 @@ function dropdownDisplayName(c: PickCandidate): string {
   const current = c.resolved.name;
   const fromFile = pascalFromFilePath(c.resolved.file);
   let base: string;
-  if (!fromFile) base = current;
+  if (c.kind === "leaf") {
+    base = current && current !== "Anonymous" ? current : (fromFile ?? current);
+  } else if (!fromFile) base = current;
   else if (GENERIC.has(current) || current === "Anonymous") base = fromFile;
   else base = current;
   return c.kind === "parent" ? `${base} (Parent)` : base;

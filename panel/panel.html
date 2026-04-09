@@ -13,7 +13,18 @@
         appends below.
       </p>
     </header>
-    <main id="list" class="list" aria-label="Accumulated context items"></main>
+    <nav class="tabs" role="tablist" aria-label="Items by status">
+      <button type="button" role="tab" id="tab-pending" class="tab" aria-selected="true" aria-controls="panel-pending">
+        Pending <span class="tab-count" id="count-pending">0</span>
+      </button>
+      <button type="button" role="tab" id="tab-done" class="tab" aria-selected="false" aria-controls="panel-done">
+        Done <span class="tab-count" id="count-done">0</span>
+      </button>
+    </nav>
+    <div class="lists-wrap">
+      <div id="panel-pending" class="list tab-panel" role="tabpanel" aria-labelledby="tab-pending"></div>
+      <div id="panel-done" class="list tab-panel hidden" role="tabpanel" aria-labelledby="tab-done" hidden></div>
+    </div>
     <footer class="ft">
       <button type="button" id="send" class="btn primary">Send For Review</button>
       <button type="button" id="clear" class="btn">Clear</button>

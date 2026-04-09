@@ -1,10 +1,16 @@
 import "./panel.css";
 
 const STORAGE_KEY = "contextItems";
-const list = document.getElementById("list") as HTMLDivElement;
+const panelPending = document.getElementById("panel-pending") as HTMLDivElement;
+const panelDone = document.getElementById("panel-done") as HTMLDivElement;
+const tabPending = document.getElementById("tab-pending") as HTMLButtonElement;
+const tabDone = document.getElementById("tab-done") as HTMLButtonElement;
+const countPending = document.getElementById("count-pending") as HTMLSpanElement;
+const countDone = document.getElementById("count-done") as HTMLSpanElement;
 const sendBtn = document.getElementById("send") as HTMLButtonElement;
 const clearBtn = document.getElementById("clear") as HTMLButtonElement;
 const undoBtn = document.getElementById("undo") as HTMLButtonElement;
+const listsWrap = document.querySelector(".lists-wrap") as HTMLDivElement;
 
 type PickItem = {
   id: string;
@@ -24,6 +30,9 @@ type PickItem = {
 
 let items: PickItem[] = [];
 let lastSentBatchIds: string[] = [];
+/** Tracks ids to detect newly appended picks (focus Pending tab). */
+let prevItemIds = new Set<string>();
+let activeTab: "pending" | "done" = "pending";
 
 function escapeHtml(s: string): string {
   return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -43,6 +52,14 @@ function fileBase(file: string): string {
   return `@${last}`;
 }
 
+function stateLineWorthIncluding(item: PickItem): boolean {
+  if (!item.includeState) return false;
+  const st = item.stateText;
+  if (st == null) return false;
+  const t = String(st).trim();
+  return t.length > 0 && t !== "(unavailable)";
+}
+
 function toClipboardBlock(item: PickItem): string {
   const fileLine = `${item.file}${lineSuffix(item.line)}`;
   const text = truncate(item.textContent ?? "", 180).replace(/\s+/g, " ").trim();
@@ -55,7 +72,7 @@ function toClipboardBlock(item: PickItem): string {
       : `Inside @${fileLine} there is a "${item.componentName}" ("${text}") -${promptPart}`;
   const extra: string[] = [`- URL: ${item.url}`];
   if (item.includeProps) extra.push(`- Props: ${item.propsText ?? "(unavailable)"}`);
-  if (item.includeState) extra.push(`- State: ${item.stateText ?? "(unavailable)"}`);
+  if (stateLineWorthIncluding(item)) extra.push(`- State: ${item.stateText}`);
   return `${lead}\nAdditional info:\n${extra.join("\n")}`;
 }
 
@@ -65,39 +82,21 @@ function buildClipboardText(all: PickItem[]): string {
   return [legend, ...blocks].join("\n\n\n");
 }
 
-async function refreshFromStorage(): Promise<void> {
-  const data = await chrome.storage.local.get(STORAGE_KEY);
-  items = ((data[STORAGE_KEY] as PickItem[] | undefined) ?? [])
-    .filter(Boolean)
-    .map((x) => ({
-      ...x,
-      status: x.status ?? "pending",
-      includeProps: x.includeProps ?? false,
-      includeState: x.includeState ?? false,
-    }));
-  render();
+function setActiveTab(tab: "pending" | "done"): void {
+  activeTab = tab;
+  const pendingSel = tab === "pending";
+  tabPending.setAttribute("aria-selected", pendingSel ? "true" : "false");
+  tabDone.setAttribute("aria-selected", pendingSel ? "false" : "true");
+  panelPending.classList.toggle("hidden", !pendingSel);
+  panelPending.toggleAttribute("hidden", !pendingSel);
+  panelDone.classList.toggle("hidden", pendingSel);
+  panelDone.toggleAttribute("hidden", pendingSel);
 }
 
-async function writeItems(next: PickItem[]): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEY]: next });
-}
-
-function render(): void {
-  const active = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
-  const activeId = active?.dataset.id ?? null;
-  const selStart = active?.selectionStart ?? null;
-  const selEnd = active?.selectionEnd ?? null;
-
-  if (!items.length) {
-    list.innerHTML = `<div class="empty">No items yet. Pick components to start building context.</div>`;
-    return;
-  }
-  list.innerHTML = "";
-  for (const item of items) {
-    const card = document.createElement("article");
-    const status = item.status ?? "pending";
-    card.className = `card ${status === "done" ? "done" : ""}`;
-    card.innerHTML = `
+function renderCard(item: PickItem): string {
+  const status = item.status ?? "pending";
+  return `
+    <article class="card ${status === "done" ? "done" : ""}" data-id="${escapeHtml(item.id)}">
       <div class="row">
         <strong>${escapeHtml(item.componentName)}</strong>
         <div style="display:flex;gap:6px;align-items:center;">
@@ -121,14 +120,51 @@ function render(): void {
       <textarea class="prompt" data-id="${escapeHtml(item.id)}" placeholder="Add prompt for this item...">${escapeHtml(
         item.prompt || "",
       )}</textarea>
-    `;
-    list.appendChild(card);
-  }
+    </article>
+  `;
+}
+
+async function refreshFromStorage(): Promise<void> {
+  const data = await chrome.storage.local.get(STORAGE_KEY);
+  items = ((data[STORAGE_KEY] as PickItem[] | undefined) ?? [])
+    .filter(Boolean)
+    .map((x) => ({
+      ...x,
+      status: x.status ?? "pending",
+      includeProps: x.includeProps ?? false,
+      includeState: x.includeState ?? false,
+    }));
+  prevItemIds = new Set(items.map((x) => x.id));
+  render();
+}
+
+async function writeItems(next: PickItem[]): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEY]: next });
+}
+
+function render(): void {
+  const active = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
+  const activeId = active?.dataset.id ?? null;
+  const selStart = active?.selectionStart ?? null;
+  const selEnd = active?.selectionEnd ?? null;
+
+  const pending = items.filter((x) => (x.status ?? "pending") === "pending");
+  const done = items.filter((x) => (x.status ?? "pending") === "done");
+
+  countPending.textContent = String(pending.length);
+  countDone.textContent = String(done.length);
+
+  const emptyPending = `<div class="empty">No pending items. Picks appear here.</div>`;
+  const emptyDone = `<div class="empty">No done items yet.</div>`;
+
+  panelPending.innerHTML = pending.length ? pending.map((x) => renderCard(x)).join("") : emptyPending;
+  panelDone.innerHTML = done.length ? done.map((x) => renderCard(x)).join("") : emptyDone;
 
   undoBtn.classList.toggle("hidden", lastSentBatchIds.length === 0);
 
+  const panel = activeTab === "pending" ? panelPending : panelDone;
   if (activeId) {
-    const next = list.querySelector(`textarea.prompt[data-id="${CSS.escape(activeId)}"]`) as
+    const next = panel.querySelector(`textarea.prompt[data-id="${CSS.escape(activeId)}"]`) as
       | HTMLTextAreaElement
       | null;
     if (next) {
@@ -140,7 +176,10 @@ function render(): void {
   }
 }
 
-list.addEventListener("click", (e) => {
+tabPending.addEventListener("click", () => setActiveTab("pending"));
+tabDone.addEventListener("click", () => setActiveTab("done"));
+
+listsWrap.addEventListener("click", (e) => {
   const t = e.target as HTMLElement;
   const toggleProps = t.closest("button[data-action='toggle-props']") as HTMLButtonElement | null;
   if (toggleProps) {
@@ -175,7 +214,7 @@ list.addEventListener("click", (e) => {
   void chrome.runtime.sendMessage({ type: "DELETE_PICK_ITEM", id });
 });
 
-list.addEventListener("input", (e) => {
+listsWrap.addEventListener("input", (e) => {
   const t = e.target as HTMLElement;
   if (!(t instanceof HTMLTextAreaElement)) return;
   if (t.disabled) return;
@@ -186,8 +225,17 @@ list.addEventListener("input", (e) => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes[STORAGE_KEY]) return;
-  items = ((changes[STORAGE_KEY].newValue as PickItem[] | undefined) ?? []).filter(Boolean);
-  items = items.map((x) => ({ ...x, status: x.status ?? "pending" }));
+  const newVal = ((changes[STORAGE_KEY].newValue as PickItem[] | undefined) ?? []).filter(Boolean);
+  const oldVal = ((changes[STORAGE_KEY].oldValue as PickItem[] | undefined) ?? []).filter(Boolean);
+  const oldIds = new Set(oldVal.map((x) => x.id));
+  const hasNewPick = newVal.some((x) => !oldIds.has(x.id));
+
+  items = newVal.map((x) => ({ ...x, status: x.status ?? "pending" }));
+  prevItemIds = new Set(items.map((x) => x.id));
+
+  if (hasNewPick) {
+    setActiveTab("pending");
+  }
   render();
 });
 
@@ -198,9 +246,11 @@ document.addEventListener("visibilitychange", () => {
 async function sendForReview(): Promise<void> {
   const missingComment = items.find((x) => !(x.prompt ?? "").trim());
   if (missingComment) {
-    const el = list.querySelector(`textarea.prompt[data-id="${CSS.escape(missingComment.id)}"]`) as
-      | HTMLTextAreaElement
-      | null;
+    setActiveTab("pending");
+    render();
+    const el = panelPending.querySelector(
+      `textarea.prompt[data-id="${CSS.escape(missingComment.id)}"]`,
+    ) as HTMLTextAreaElement | null;
     el?.focus();
     sendBtn.textContent = "Fill all comments";
     setTimeout(() => (sendBtn.textContent = "Send For Review"), 1300);
@@ -217,9 +267,13 @@ async function sendForReview(): Promise<void> {
     const next = items.map((x) =>
       pendingIds.includes(x.id) ? { ...x, status: "done" as const } : x,
     );
+    setActiveTab("done");
     await writeItems(next);
+    items = next;
+    prevItemIds = new Set(items.map((x) => x.id));
+    render();
   } catch {
-    // ignore, button labels indicate failure minimally
+    // ignore
   }
 }
 

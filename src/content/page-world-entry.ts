@@ -6,7 +6,9 @@
 import {
   getFiberFromNode,
   getFiberFromHostInstance,
+  nearestLeafFiberWithFile,
   nearestLeafNamedWithFile,
+  resolveOutermostFiberForSourceFile,
   resolvePickFromFiber,
   snapshotPropsStateForPick,
 } from "./fiber";
@@ -38,6 +40,14 @@ type PickCandidate = {
   kind: "leaf" | "parent";
   propsText: string | null;
   stateText: string | null;
+};
+
+type RawPick = {
+  fiber: NonNullable<ReturnType<typeof getFiberFromHostInstance>>;
+  resolved: ReturnType<typeof resolvePickFromFiber>;
+  layer: Candidate["layer"];
+  pathIndex: number;
+  score: number;
 };
 
 function isLocalProjectFile(file: string): boolean {
@@ -119,8 +129,27 @@ function pickRankedFiber(xpaths: string[]): ReturnType<typeof getFiberFromHostIn
   return candidates[0].fiber;
 }
 
+function normPathKey(file: string): string {
+  return file.replace(/\\/g, "/");
+}
+
+function pickCandidateFromFiber(
+  fiber: RawPick["fiber"],
+  kind: PickCandidate["kind"],
+  pathIndex: number,
+  layer: Candidate["layer"],
+  score: number,
+): PickCandidate | null {
+  const resolved = resolvePickFromFiber(fiber);
+  if (resolved.name === "Anonymous" || resolved.file === "unknown" || !isLocalProjectFile(resolved.file)) {
+    return null;
+  }
+  const { propsText, stateText } = snapshotPropsStateForPick(fiber);
+  return { resolved, layer, pathIndex, score, kind, propsText, stateText };
+}
+
 function buildPickCandidates(xpaths: string[]): PickCandidate[] {
-  const out: PickCandidate[] = [];
+  const raw: RawPick[] = [];
   const seen = new Set<string>();
 
   for (let i = 0; i < xpaths.length; i++) {
@@ -133,7 +162,6 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     const layer = classifyLayer(node);
     const score = layerScore(layer) - i;
     const resolved = resolvePickFromFiber(fiber);
-    // Strict list rule: show only named, non-anonymous entries with a valid local project file.
     if (resolved.name === "Anonymous" || resolved.file === "unknown" || !isLocalProjectFile(resolved.file)) {
       continue;
     }
@@ -141,35 +169,80 @@ function buildPickCandidates(xpaths: string[]): PickCandidate[] {
     const key = `${resolved.file}|${resolved.line}|${resolved.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const { propsText, stateText } = snapshotPropsStateForPick(fiber);
-    out.push({ resolved, layer, pathIndex: i, score, kind: "leaf", propsText, stateText });
+    raw.push({ fiber, resolved, layer, pathIndex: i, score });
   }
 
-  // Per file: keep nearest (leaf, smallest pathIndex) and outermost in composed path (parent, largest pathIndex).
-  const grouped = new Map<string, PickCandidate[]>();
-  for (const c of out) {
-    const arr = grouped.get(c.resolved.file) ?? [];
-    arr.push(c);
-    grouped.set(c.resolved.file, arr);
+  let anchorFiber = pickRankedFiber(xpaths);
+  if (!anchorFiber && xpaths.length > 0) {
+    const n = evalXPath(xpaths[0]);
+    if (n) anchorFiber = getFiberFromNode(n);
   }
+
+  const anchorNode = xpaths.length ? evalXPath(xpaths[0]) : null;
+  const baseLayer = anchorNode ? classifyLayer(anchorNode) : "page";
+  const baseScore = layerScore(baseLayer);
+
+  const keyOfResolved = (r: PickCandidate["resolved"]): string =>
+    `${r.file}|${r.line}|${r.name}`;
+
+  const semanticLeafFiber = anchorFiber ? nearestLeafFiberWithFile(anchorFiber) : null;
+  const semanticKey = semanticLeafFiber ? keyOfResolved(resolvePickFromFiber(semanticLeafFiber)) : null;
+  const leafFileNorm = semanticLeafFiber
+    ? normPathKey(resolvePickFromFiber(semanticLeafFiber).file)
+    : null;
+
+  const grouped = new Map<string, RawPick[]>();
+  for (const r of raw) {
+    const arr = grouped.get(r.resolved.file) ?? [];
+    arr.push(r);
+    grouped.set(r.resolved.file, arr);
+  }
+
+  const globalMinPathIndex = raw.length ? Math.min(...raw.map((r) => r.pathIndex)) : 0;
 
   const kept: PickCandidate[] = [];
-  const keyOf = (c: PickCandidate): string =>
-    `${c.resolved.file}|${c.resolved.line}|${c.resolved.name}`;
+  const dedup = new Set<string>();
+
+  const push = (c: PickCandidate | null): void => {
+    if (!c) return;
+    const k = keyOfResolved(c.resolved);
+    if (dedup.has(k)) return;
+    dedup.add(k);
+    kept.push(c);
+  };
+
+  if (semanticLeafFiber) {
+    push(
+      pickCandidateFromFiber(semanticLeafFiber, "leaf", -2, baseLayer, baseScore + 2),
+    );
+  }
 
   for (const [, arr] of grouped) {
     arr.sort((a, b) => a.pathIndex - b.pathIndex);
     const leaf = arr[0];
     const parent = arr[arr.length - 1];
-    if (keyOf(leaf) === keyOf(parent)) {
-      kept.push({ ...leaf, kind: "leaf" });
-    } else {
-      kept.push({ ...leaf, kind: "leaf" });
-      kept.push({ ...parent, kind: "parent" });
+    const file = leaf.resolved.file;
+
+    if (keyOfResolved(leaf.resolved) === keyOfResolved(parent.resolved)) {
+      const k = keyOfResolved(leaf.resolved);
+      if (semanticKey && k === semanticKey) continue;
+      const kind: PickCandidate["kind"] = leaf.pathIndex === globalMinPathIndex ? "leaf" : "parent";
+      push(pickCandidateFromFiber(leaf.fiber, kind, leaf.pathIndex, leaf.layer, leaf.score));
+      continue;
     }
+
+    // Same file as the semantic leaf: outermost meaningful parent (e.g. EditCustomerForm vs FormProvider).
+    // Different file: use path-nearest parent for that file so we don't repeat the same component name twice.
+    const sameFileAsLeaf = leafFileNorm !== null && normPathKey(file) === leafFileNorm;
+    const parentFib =
+      sameFileAsLeaf && anchorFiber != null
+        ? resolveOutermostFiberForSourceFile(anchorFiber, file) ?? parent.fiber
+        : parent.fiber;
+    push(
+      pickCandidateFromFiber(parentFib, "parent", parent.pathIndex, parent.layer, parent.score),
+    );
   }
 
-  // Show nearest-first in dropdown across files.
   kept.sort((a, b) => a.pathIndex - b.pathIndex);
   return kept.slice(0, 10);
 }

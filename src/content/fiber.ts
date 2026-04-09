@@ -353,6 +353,12 @@ function nearestNonAnonymousNameOnly(start: Fiber | null): string | null {
 
 /** Nearest named non-anonymous component from clicked leaf that has a debug file. */
 export function nearestLeafNamedWithFile(start: Fiber | null): string | null {
+  const lf = nearestLeafFiberWithFile(start);
+  return lf ? getNameFromFiber(lf) : null;
+}
+
+/** Fiber for {@link nearestLeafNamedWithFile} (e.g. Typography under a form). */
+export function nearestLeafFiberWithFile(start: Fiber | null): Fiber | null {
   let f: Fiber | null = start;
   for (let d = 0; f && d < 180; d++) {
     if (typeof f.type === "string") {
@@ -361,7 +367,7 @@ export function nearestLeafNamedWithFile(start: Fiber | null): string | null {
     }
     const n = getNameFromFiber(f);
     const s = getDebugSourceExtended(f);
-    if (n && n !== "Anonymous" && s?.fileName) return n;
+    if (n && n !== "Anonymous" && s?.fileName) return f;
     f = f.return;
   }
   let o: Fiber | null = start;
@@ -369,12 +375,33 @@ export function nearestLeafNamedWithFile(start: Fiber | null): string | null {
     if (typeof o.type !== "string") {
       const n = getNameFromFiber(o);
       const s = getDebugSourceExtended(o);
-      if (n && n !== "Anonymous" && s?.fileName) return n;
+      if (n && n !== "Anonymous" && s?.fileName) return o;
     }
     o = (o._debugOwner as Fiber | null) ?? null;
   }
   return null;
 }
+
+/** Shared with {@link resolveOutermostNamedInSameFile} / {@link resolveOutermostFiberInSameFile}. */
+const OUTERMOST_GENERIC_RUNTIME_NAMES = new Set([
+  "Provider",
+  "FormProvider",
+  "Box",
+  "Grid",
+  "Stack",
+  "Dialog",
+  "DialogContent",
+  "DialogTitle",
+  "DialogActions",
+  "TextField",
+  "Button",
+  "IconButton",
+  "Typography",
+  "Container",
+  "Paper",
+  "Card",
+  "Fragment",
+]);
 
 /**
  * Walk upward and return the outermost named component that still maps to the same source file.
@@ -385,6 +412,22 @@ export function resolveOutermostNamedInSameFile(start: Fiber | null): {
   file: string;
   line: string;
 } | null {
+  const fib = resolveOutermostFiberInSameFile(start);
+  if (!fib) return null;
+  const s = getDebugSourceExtended(fib);
+  const n = getNameFromFiber(fib);
+  if (!n || !s?.fileName) return null;
+  return {
+    name: n,
+    file: normalizeDevPath(s.fileName),
+    line: typeof s.lineNumber === "number" && Number.isFinite(s.lineNumber) ? String(s.lineNumber) : "?",
+  };
+}
+
+/**
+ * Outermost named fiber in the same source file as the anchor (prefers non-generic names like MyForm over FormProvider).
+ */
+export function resolveOutermostFiberInSameFile(start: Fiber | null): Fiber | null {
   if (!start) return null;
 
   const best = findBestFiber(start);
@@ -396,28 +439,8 @@ export function resolveOutermostNamedInSameFile(start: Fiber | null): {
   if (!baseSrc?.fileName) return null;
   const baseFile = normalizeDevPath(baseSrc.fileName);
 
-  const GENERIC_RUNTIME_NAMES = new Set([
-    "Provider",
-    "FormProvider",
-    "Box",
-    "Grid",
-    "Stack",
-    "Dialog",
-    "DialogContent",
-    "DialogTitle",
-    "DialogActions",
-    "TextField",
-    "Button",
-    "IconButton",
-    "Typography",
-    "Container",
-    "Paper",
-    "Card",
-    "Fragment",
-  ]);
-
-  const preferred: Array<{ name: string; file: string; line: string; depth: number }> = [];
-  const generic: Array<{ name: string; file: string; line: string; depth: number }> = [];
+  const preferred: Array<{ fiber: Fiber; depth: number }> = [];
+  const generic: Array<{ fiber: Fiber; depth: number }> = [];
   let f: Fiber | null = start;
   for (let d = 0; f && d < 220; d++) {
     if (typeof f.type === "string") {
@@ -432,13 +455,8 @@ export function resolveOutermostNamedInSameFile(start: Fiber | null): {
     }
     const currentFile = normalizeDevPath(s.fileName);
     if (currentFile === baseFile) {
-      const entry = {
-        name: n,
-        file: currentFile,
-        line: typeof s.lineNumber === "number" && Number.isFinite(s.lineNumber) ? String(s.lineNumber) : "?",
-        depth: d,
-      };
-      if (GENERIC_RUNTIME_NAMES.has(n)) {
+      const entry = { fiber: f, depth: d };
+      if (OUTERMOST_GENERIC_RUNTIME_NAMES.has(n)) {
         generic.push(entry);
       } else {
         preferred.push(entry);
@@ -446,13 +464,50 @@ export function resolveOutermostNamedInSameFile(start: Fiber | null): {
     }
     f = f.return;
   }
-  // Keep same-file boundary behavior, but prefer non-generic component names (e.g. MyForm).
-  // Outermost = largest depth in the return chain.
   const pool = preferred.length ? preferred : generic;
   if (!pool.length) return null;
   pool.sort((a, b) => b.depth - a.depth);
-  const bestEntry = pool[0];
-  return { name: bestEntry.name, file: bestEntry.file, line: bestEntry.line };
+  return pool[0].fiber;
+}
+
+/**
+ * Outermost non-generic fiber whose **debug source file** equals `targetFile` (walk `return` from `start`).
+ * Used so the parent row shows EditCustomerForm instead of FormProvider when both map to the same file.
+ */
+export function resolveOutermostFiberForSourceFile(start: Fiber | null, targetFile: string): Fiber | null {
+  if (!start) return null;
+  const target = normalizeDevPath(targetFile);
+  const preferred: Array<{ fiber: Fiber; depth: number; name: string }> = [];
+  const generic: Array<{ fiber: Fiber; depth: number; name: string }> = [];
+  let f: Fiber | null = start;
+  for (let d = 0; f && d < 220; d++) {
+    if (typeof f.type === "string") {
+      f = f.return;
+      continue;
+    }
+    const n = getNameFromFiber(f);
+    const s = getDebugSourceExtended(f);
+    if (!n || n === "Anonymous" || !s?.fileName) {
+      f = f.return;
+      continue;
+    }
+    const currentFile = normalizeDevPath(s.fileName);
+    if (currentFile !== target) {
+      f = f.return;
+      continue;
+    }
+    const entry = { fiber: f, depth: d, name: n };
+    if (OUTERMOST_GENERIC_RUNTIME_NAMES.has(n)) {
+      generic.push(entry);
+    } else {
+      preferred.push(entry);
+    }
+    f = f.return;
+  }
+  const pool = preferred.length ? preferred : generic;
+  if (!pool.length) return null;
+  pool.sort((a, b) => b.depth - a.depth);
+  return pool[0].fiber;
 }
 
 function isTsxOrJsxPath(filePath: string): boolean {
