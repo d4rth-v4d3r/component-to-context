@@ -87,7 +87,8 @@ kbd {
 .card.done strong,
 .card.done .badge.text,
 .card.done .badge.file,
-.card.done .badge.url {
+.card.done .badge.url,
+.card.done .badge.toggle {
   text-decoration: line-through;
 }
 
@@ -132,14 +133,18 @@ kbd {
   background: color-mix(in srgb, #f59e0b 14%, var(--bg));
 }
 
-.badge.status.pending {
-  border-color: color-mix(in srgb, #38bdf8 40%, var(--border));
-  background: color-mix(in srgb, #38bdf8 16%, var(--bg));
+.badge.toggle {
+  cursor: pointer;
+  background: color-mix(in srgb, var(--bg) 80%, var(--fg));
 }
 
-.badge.status.done {
-  border-color: color-mix(in srgb, #22c55e 40%, var(--border));
-  background: color-mix(in srgb, #22c55e 16%, var(--bg));
+.badge.toggle:hover {
+  filter: brightness(1.1);
+}
+
+.badge.toggle.on {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg));
 }
 
 .prompt {
@@ -155,8 +160,7 @@ kbd {
 }
 
 .card.done .prompt {
-  opacity: 0.75;
-  cursor: not-allowed;
+  opacity: 0.82;
 }
 
 .icon {

@@ -10,6 +10,10 @@ type PickItem = {
   prompt: string;
   selectionKind: "leaf" | "parent";
   status?: "pending" | "done";
+  includeProps?: boolean;
+  includeState?: boolean;
+  propsText?: string | null;
+  stateText?: string | null;
 };
 
 chrome.runtime.onInstalled.addListener(() => {

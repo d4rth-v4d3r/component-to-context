@@ -28,6 +28,10 @@ type PickItem = {
   prompt: string;
   selectionKind: "leaf" | "parent";
   status: "pending" | "done";
+  includeProps: boolean;
+  includeState: boolean;
+  propsText: string | null;
+  stateText: string | null;
 };
 
 function pickUrlPath(): string {
@@ -266,11 +270,21 @@ function formatBlock(
 
 function buildPickItem(
   textContent: string,
+  fiber: ReturnType<typeof getFiberFromComposedPath>,
   resolved: PickResolved,
   componentName: string,
   selectionKind: "leaf" | "parent",
 ): PickItem {
   const file = resolved.file === "unknown" ? "unknown" : resolved.file;
+  const best = findBestFiber(fiber);
+  const propsText = serializePropsForContext(getMemoizedProps(best));
+  const stateRaw = best?.memoizedState ?? null;
+  const stateText =
+    stateRaw == null
+      ? null
+      : typeof stateRaw === "object"
+        ? serializePropsForContext(stateRaw)
+        : String(stateRaw);
   return {
     id: crypto.randomUUID(),
     file,
@@ -281,6 +295,10 @@ function buildPickItem(
     prompt: PROMPT_PLACEHOLDER,
     selectionKind,
     status: "pending",
+    includeProps: false,
+    includeState: false,
+    propsText,
+    stateText,
   };
 }
 
@@ -417,7 +435,7 @@ function tryPick(ev: MouseEvent, source: string): void {
     }
 
     const copyName = leafNameForCopy || resolved.name;
-    const item = buildPickItem(clickedText, resolved, copyName, selectionKind);
+    const item = buildPickItem(clickedText, fiber, resolved, copyName, selectionKind);
 
     void chrome.runtime
       .sendMessage({ type: "APPEND_PICK_ITEM", item })

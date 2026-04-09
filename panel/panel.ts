@@ -16,6 +16,10 @@ type PickItem = {
   prompt: string;
   selectionKind: "leaf" | "parent";
   status?: "pending" | "done";
+  includeProps?: boolean;
+  includeState?: boolean;
+  propsText?: string | null;
+  stateText?: string | null;
 };
 
 let items: PickItem[] = [];
@@ -49,7 +53,10 @@ function toClipboardBlock(item: PickItem): string {
     item.selectionKind === "leaf"
       ? `In @${fileLine} ${item.componentName}("${text}") -${promptPart}`
       : `Inside @${fileLine} there is a "${item.componentName}" ("${text}") -${promptPart}`;
-  return `${lead}\nAdditional info:\n- URL: ${item.url}`;
+  const extra: string[] = [`- URL: ${item.url}`];
+  if (item.includeProps) extra.push(`- Props: ${item.propsText ?? "(unavailable)"}`);
+  if (item.includeState) extra.push(`- State: ${item.stateText ?? "(unavailable)"}`);
+  return `${lead}\nAdditional info:\n${extra.join("\n")}`;
 }
 
 function buildClipboardText(all: PickItem[]): string {
@@ -62,7 +69,12 @@ async function refreshFromStorage(): Promise<void> {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   items = ((data[STORAGE_KEY] as PickItem[] | undefined) ?? [])
     .filter(Boolean)
-    .map((x) => ({ ...x, status: x.status ?? "pending" }));
+    .map((x) => ({
+      ...x,
+      status: x.status ?? "pending",
+      includeProps: x.includeProps ?? false,
+      includeState: x.includeState ?? false,
+    }));
   render();
 }
 
@@ -99,11 +111,16 @@ function render(): void {
         <span class="badge text">${escapeHtml(truncate(item.textContent || "", 42) || "(no text)")}</span>
         <span class="badge file">${escapeHtml(`${fileBase(item.file)}${lineSuffix(item.line)}`)}</span>
         <span class="badge url">${escapeHtml(truncate(item.url || "", 56) || "(no url)")}</span>
-        <span class="badge status ${status}">${status}</span>
+        <button class="badge toggle ${item.includeProps ? "on" : ""}" data-action="toggle-props" data-id="${escapeHtml(
+          item.id,
+        )}" title="Include Props in send">🧩</button>
+        <button class="badge toggle ${item.includeState ? "on" : ""}" data-action="toggle-state" data-id="${escapeHtml(
+          item.id,
+        )}" title="Include State in send">⚛</button>
       </div>
-      <textarea class="prompt" data-id="${escapeHtml(item.id)}" placeholder="Add prompt for this item..." ${
-        status === "done" ? "disabled" : ""
-      }>${escapeHtml(item.prompt || "")}</textarea>
+      <textarea class="prompt" data-id="${escapeHtml(item.id)}" placeholder="Add prompt for this item...">${escapeHtml(
+        item.prompt || "",
+      )}</textarea>
     `;
     list.appendChild(card);
   }
@@ -125,6 +142,22 @@ function render(): void {
 
 list.addEventListener("click", (e) => {
   const t = e.target as HTMLElement;
+  const toggleProps = t.closest("button[data-action='toggle-props']") as HTMLButtonElement | null;
+  if (toggleProps) {
+    const id = toggleProps.dataset.id;
+    if (!id) return;
+    const next = items.map((x) => (x.id === id ? { ...x, includeProps: !(x.includeProps ?? false) } : x));
+    void writeItems(next);
+    return;
+  }
+  const toggleState = t.closest("button[data-action='toggle-state']") as HTMLButtonElement | null;
+  if (toggleState) {
+    const id = toggleState.dataset.id;
+    if (!id) return;
+    const next = items.map((x) => (x.id === id ? { ...x, includeState: !(x.includeState ?? false) } : x));
+    void writeItems(next);
+    return;
+  }
   const toggle = t.closest("button[data-action='toggle']") as HTMLButtonElement | null;
   if (toggle) {
     const id = toggle.dataset.id;
@@ -163,6 +196,17 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function sendForReview(): Promise<void> {
+  const missingComment = items.find((x) => !(x.prompt ?? "").trim());
+  if (missingComment) {
+    const el = list.querySelector(`textarea.prompt[data-id="${CSS.escape(missingComment.id)}"]`) as
+      | HTMLTextAreaElement
+      | null;
+    el?.focus();
+    sendBtn.textContent = "Fill all comments";
+    setTimeout(() => (sendBtn.textContent = "Send For Review"), 1300);
+    return;
+  }
+
   const pending = items.filter((x) => (x.status ?? "pending") === "pending");
   const text = buildClipboardText(pending);
   if (!text.trim()) return;
